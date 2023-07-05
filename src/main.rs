@@ -1,10 +1,13 @@
 use printpdf::*;
 use scraper::{Html, Selector};
-use core::prelude::v1;
-use std::{env, fs::File, error::Error, io::{Read, BufWriter}, char::{MAX, decode_utf16}};
+use std::{env, fs::File, fmt, error::Error, io::{Read, BufWriter}, char::{MAX, decode_utf16}};
 
 const MAX_DESC_LENGTH: usize = 23;
-const MAX_AMOUNT_LENGTH: usize = 12;
+macro_rules! lpad {
+    ($arg:expr) => {{
+        format!("{:>12}", $arg)
+    }}
+}
 
 #[derive(Debug)]
 struct ReceiptInfo {
@@ -57,7 +60,7 @@ impl ReceiptInfo {
 #[derive(Debug)]
 struct ItemLine {
     code: String,
-    description: Vec<String>,
+    description: String,
     quantity: String,
     price: String,
     amount: String,
@@ -67,7 +70,7 @@ impl ItemLine {
     const fn new() -> Self {
         Self {
             code: String::new(),
-            description: Vec::new(),
+            description: String::new(),
             quantity: String::new(),
             price: String::new(),
             amount: String::new(),
@@ -211,14 +214,14 @@ fn gen_pdf(receipt: &ReceiptInfo) -> Result<PdfDocumentReference, Box<dyn Error>
     // 8.5" x 11" = 215.9mm x 279.4mm = 612pt x 792pt
     let (doc, page1, layer1) = PdfDocument::new("PDF_Document_title", Pt(612.0).into(), Pt(792.0).into(), "Layer 1");
     let font_regular = doc.add_external_font(
-        File::open("fonts/NotoSans-Regular.ttf").unwrap()
-    ).unwrap();
+        File::open("fonts/NotoSans-Regular.ttf")?
+    )?;
     let font_bold = doc.add_external_font(
-        File::open("fonts/NotoSans-Bold.ttf").unwrap()
-    ).unwrap();
+        File::open("fonts/NotoSans-Bold.ttf")?
+    )?;
     let font_mono = doc.add_external_font(
-        File::open("fonts/NotoSansMono-Regular.tff").unwrap()
-    ).unwrap();
+        File::open("fonts/NotoSansMono-Regular.tff")?
+    )?;
     let current_layer = doc.get_page(page1).get_layer(layer1);
     let left_margin: Mm = Pt(54.0).into();
     let right_margin: Mm = Pt(558.0).into();
@@ -251,7 +254,6 @@ fn gen_pdf(receipt: &ReceiptInfo) -> Result<PdfDocumentReference, Box<dyn Error>
     // Box for headers1
     // Pt 680 to 600 with 18pt font leaves space for four max lines
     let headers_bottom_border: Mm = Pt(640.0).into();
-    let headers_size = 30.0;
     // current_layer.add_box(left_margin, headers_bottom_border, right_margin, headers_bottom_border + Pt(headers_size).into());
     let spacing: Mm = Pt(5.0).into();
     let font_size = 8.0;
@@ -302,13 +304,12 @@ fn gen_pdf(receipt: &ReceiptInfo) -> Result<PdfDocumentReference, Box<dyn Error>
     current_layer.add_box(left_margin, li_bottom, right_margin, li_top);
 
     // vertical lines to divide line item on invoice
-    let li_vlines: [Mm; 6] = [
+    let li_vlines: [Mm; 5] = [
         Pt(104.0).into(), // Name | Desc
-        Pt(252.0).into(), // Desc | U/M
-        Pt(292.0).into(), // U/M | Qty
-        Pt(350.0).into(), // Qty | Price
-        Pt(414.0).into(), // Price | Disc
-        Pt(486.0).into(), // Disc |  Total
+        Pt(282.0).into(), // Desc | U/M
+        Pt(322.0).into(), // U/M | Qty
+        Pt(393.0).into(), // Qty | Price
+        Pt(476.0).into(), // Price | Total
     ];
     for x in li_vlines {
         current_layer.add_line(x, li_bottom, x, li_top);
@@ -328,34 +329,33 @@ fn gen_pdf(receipt: &ReceiptInfo) -> Result<PdfDocumentReference, Box<dyn Error>
         current_layer.use_text("U/M"        , font_size, li_vlines[1] + spacing, cursor_y, &font_regular);
         current_layer.use_text("Quantity"   , font_size, li_vlines[2] + spacing, cursor_y, &font_regular);
         current_layer.use_text("Unit Price" , font_size, li_vlines[3] + spacing, cursor_y, &font_regular);
-        current_layer.use_text("Discount"   , font_size, li_vlines[4] + spacing, cursor_y, &font_regular);
-        current_layer.use_text("Total"      , font_size, li_vlines[5] + spacing, cursor_y, &font_regular);
+        current_layer.use_text("Total"      , font_size, li_vlines[4] + spacing, cursor_y, &font_regular);
 
         // Add content
         bottom_border -= line_height_mm;
         cursor_y = bottom_border + spacing;
         let font_size = 10.0;
-        let line_height_mm: Mm = Pt(16.0).into();
+        let line_height_mm: Mm = Pt(15.0).into();
         for line in &receipt.item_lines {
-            let desc_lines = split_into_lines(&line.description[0], MAX_DESC_LENGTH);
-            let item_num = str::parse::<usize>(&line.code).unwrap();
+            let desc_lines = split_into_lines(&line.description, MAX_DESC_LENGTH);
+            // let desc_lines = split_into_lines("Interior-crocodile-alligator I drive a chevrolet-movie-theater.", 28);
+            let item_num = str::parse::<usize>(&line.code)?;
             let uom = if item_num >= 2000 && item_num < 2100 {
                 "EA" // item is a block
             } else {
                 "TON" // item is not a block
             };
             let qty = if uom.eq("EA") && line.quantity.ends_with(".000") { 
-                format!("{}    ", &line.quantity[..line.quantity.len()-4])
+                format!("{:>6}    ", &line.quantity[..line.quantity.len()-4])
             } else {
-                line.quantity.to_owned()
+                format!("{:>10}", line.quantity)
             };
             current_layer.use_text(&line.code,                 font_size, left_margin  + spacing, cursor_y, &font_mono);
             current_layer.use_text(&desc_lines[0],             font_size, li_vlines[0] + spacing, cursor_y, &font_mono);
             current_layer.use_text(uom,                        font_size, li_vlines[1] + spacing, cursor_y, &font_mono);
-            current_layer.use_text(&format!("{:>8}", &line.quantity),     font_size, li_vlines[2] + spacing, cursor_y, &font_mono);
-            current_layer.use_text(&format!("{:>9}", &line.price),   font_size, li_vlines[3] + spacing, cursor_y, &font_mono);
-            // current_layer.use_text("Discount"   , font_size, li_vlines[4] + spacing, cursor_y, &font_mono);
-            current_layer.use_text(&format!("{:>10}", &line.amount), font_size, li_vlines[5] + spacing, cursor_y, &font_mono);
+            current_layer.use_text(&qty,     font_size, li_vlines[2] + spacing, cursor_y, &font_mono);
+            current_layer.use_text(&lpad!(&line.price),   font_size, li_vlines[3] + spacing, cursor_y, &font_mono);
+            current_layer.use_text(&lpad!(&line.amount), font_size, li_vlines[4] + spacing, cursor_y, &font_mono);
             // Add additional description lines
             for i in 1..desc_lines.len() {
                 bottom_border -= line_height_mm;
@@ -369,8 +369,8 @@ fn gen_pdf(receipt: &ReceiptInfo) -> Result<PdfDocumentReference, Box<dyn Error>
 
     // add totals below table on right side
     let mut current_y = li_bottom;
-    let x1 = li_vlines[4] + spacing;
-    let x2 = li_vlines[5] + spacing;
+    let x1 = li_vlines[3] + spacing;
+    let x2 = li_vlines[4] + spacing;
     for amount in &receipt.totals {
         current_y -= line_height;
         let font = if amount.name.eq("Total:") {
@@ -379,7 +379,7 @@ fn gen_pdf(receipt: &ReceiptInfo) -> Result<PdfDocumentReference, Box<dyn Error>
             &font_regular
         };
         current_layer.use_text(&amount.name, font_size, x1, current_y, font);
-        current_layer.use_text(&format!("{:>10}", amount.value), 10.0, x2, current_y, &font_mono);
+        current_layer.use_text(&lpad!(amount.value), 10.0, x2, current_y, &font_mono);
     }
 
     // Add tenders below table on left side
@@ -393,7 +393,7 @@ fn gen_pdf(receipt: &ReceiptInfo) -> Result<PdfDocumentReference, Box<dyn Error>
     for amount in &receipt.payments {
         current_y -= line_height;
         current_layer.use_text(&amount.name, 10.0, x1, current_y, &font_regular);
-        current_layer.use_text(&format!("{:>13}", amount.value), 10.0, x2, current_y, &font_mono);
+        current_layer.use_text(&lpad!(amount.value), 10.0, x2, current_y, &font_mono);
     }
 
     //Pt 54 to 94 for signature box 
@@ -509,7 +509,7 @@ fn parse_html(filename: &str) -> Result<ReceiptInfo, Box<dyn std::error::Error>>
                 } else {
                     let item_line = ItemLine {
                         code,
-                        description: Vec::from([description]),
+                        description,
                         quantity,
                         price,
                         amount
@@ -598,21 +598,21 @@ fn split_into_lines(string: &str, max_length: usize) -> Vec<String> {
     }
 
     lines.push(string.to_owned());
-    while lines.last().unwrap().len() >= max_length {
+    while lines.last().unwrap().len() > max_length {
         let last_line = unsafe { lines.pop().unwrap_unchecked() };
-        let final_whitespace = &last_line[..max_length]
+        let final_whitespace = &last_line[..max_length+1]
             .chars()
             .enumerate()
             .filter(|(_, char)| char.eq(&' ') || char.eq(&'-'))
             .last();
         if let Some((index, _)) = final_whitespace {
-            let (first_str, last_str)= last_line.split_at(*index);
+            let (first_str, last_str)= last_line.split_at(*index+1);
             lines.push(first_str.to_owned());
-            lines.push(last_str.to_owned());
+            lines.push(format!(" {last_str}"));
         } else {
-            let (first_str, last_str)= last_line.split_at(max_length);
+            let (first_str, last_str)= last_line.split_at(max_length+1);
             lines.push(format!("{first_str}-"));
-            lines.push(last_str.to_owned());
+            lines.push(format!(" {last_str}"));
         }
     }
     return lines;
