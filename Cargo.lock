@@ -746,8 +746,7 @@ checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 [[package]]
 name = "printpdf"
 version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b61f0c6672a5507f0557c50c2263abc54fecc2a4c0ca56499be1396679a686c"
+source = "git+https://github.com/sizeru/printpdf#cddd5eb88a52a4090c19f83672d5adcd2d00ef2d"
 dependencies = [
  "js-sys",
  "lopdf",

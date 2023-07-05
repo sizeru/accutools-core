@@ -7,5 +7,5 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.71"
-printpdf = { version = "0.5.3", features = ["svg"] }
+printpdf = { git = "https://github.com/sizeru/printpdf", features = ["svg"] }
 scraper = "0.17.1"
