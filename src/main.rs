@@ -1,6 +1,7 @@
-use printpdf::*;
+use printpdf::{PdfDocument, PdfDocumentReference, Mm, PdfLayerReference, Point, Line, Pt, SvgTransform, Svg};
 use scraper::{Html, Selector};
-use std::{env, fs::File, fmt, error::Error, io::{Read, BufWriter}, char::{MAX, decode_utf16}};
+use std::{env, fs::{File, self, read_dir}, io::BufWriter, sync::Arc};
+use anyhow::{Error, Result, Context};
 
 const MAX_DESC_LENGTH: usize = 23;
 macro_rules! lpad {
@@ -66,31 +67,10 @@ struct ItemLine {
     amount: String,
 }
 
-impl ItemLine {
-    const fn new() -> Self {
-        Self {
-            code: String::new(),
-            description: String::new(),
-            quantity: String::new(),
-            price: String::new(),
-            amount: String::new(),
-        }
-    }
-}
-
 #[derive(Debug)]
 struct Amount {
     name: String,
     value: String,
-}
-
-impl Amount {
-    const fn new() -> Self {
-        Self {
-            name: String::new(),
-            value: String::new(),
-        }
-    }
 }
 
 impl<'a> Cleanup for scraper::element_ref::Text<'a> {
@@ -194,33 +174,87 @@ impl QuickShapes for PdfLayerReference {
     }
 }
 
+struct PdfResources {
+    font_regular: Arc<[u8]>,
+    font_bold: Arc<[u8]>,
+    font_mono: Arc<[u8]>,
+    logo: Svg,
+}
+
+impl PdfResources {
+    pub fn load() -> Result<Self, Error> {
+        let font_regular = fs::read("fonts/NotoSans-Regular.ttf")?;
+        let font_bold = fs::read("fonts/NotoSans-Bold.ttf")?;
+        let font_mono = fs::read("fonts/NotoSansMono-Regular.tff")?;
+        let logo = {
+            let svg = fs::read_to_string("logo.svg")?;
+            Svg::parse(&svg)?
+        };
+        // Converting from Vec to Arc doesn't reallocate the memory. Party!
+        // This would be a safe thing to use raw pointers on, but I don't want
+        // to implement that right now!
+        return Ok(Self { 
+            font_regular: Arc::from(font_regular),
+            font_bold: Arc::from(font_bold),
+            font_mono: Arc::from(font_mono),
+            logo
+        });
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     let input_file = args.get(1).unwrap();
-    let receipt = parse_html(input_file)?;
-    let doc = gen_pdf(&receipt)?; 
-
     let output_file = if let Some(output_file) = args.get(2) {
         output_file
     } else {
         "receipt.pdf"
     };
-    doc.save(&mut BufWriter::new(File::create(output_file).unwrap())).unwrap();
+
+    // We preload these resources so we don't do repetitive IO during runtime
+    let now = std::time::Instant::now();
+    let mailpath = std::path::Path::new("new");
+    let pdf_resources = PdfResources::load()?;
+    println!("Resources loaded: {:?}", now.elapsed());
+    let mut i = 0;
+    for file in fs::read_dir(mailpath).unwrap() {
+        println!("");
+        let now = std::time::Instant::now();
+        i+=1;
+        let entry = file.unwrap().path();
+        let pdf_file = entry.to_str().unwrap();
+        let receipt = parse_html(pdf_file);
+        println!("Receipt parsed: {:?}", now.elapsed());
+        if let Err(err) = receipt {
+            println!("{err:?}");
+            continue;
+        }
+        let receipt = receipt.unwrap();
+        let doc = gen_pdf(&receipt, &pdf_resources); 
+        println!("Doc structure created: {:?}", now.elapsed());
+        if let Err(err) = doc {
+            println!("{err:?}");
+            continue;
+        }
+        let doc = doc.unwrap();
+        doc.save(&mut BufWriter::new(File::create(format!("res/{i}.pdf")).unwrap())).unwrap();
+        println!("Doc saved: {:?}", now.elapsed());
+    }
     Ok(())
 }
 
-fn gen_pdf(receipt: &ReceiptInfo) -> Result<PdfDocumentReference, Box<dyn Error>> {
+fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDocumentReference, Error> {
     // Create and initialize document
     // 8.5" x 11" = 215.9mm x 279.4mm = 612pt x 792pt
     let (doc, page1, layer1) = PdfDocument::new("PDF_Document_title", Pt(612.0).into(), Pt(792.0).into(), "Layer 1");
     let font_regular = doc.add_external_font(
-        File::open("fonts/NotoSans-Regular.ttf")?
+        resources.font_regular.as_ref()
     )?;
     let font_bold = doc.add_external_font(
-        File::open("fonts/NotoSans-Bold.ttf")?
+        resources.font_bold.as_ref()
     )?;
     let font_mono = doc.add_external_font(
-        File::open("fonts/NotoSansMono-Regular.tff")?
+        resources.font_mono.as_ref()
     )?;
     let current_layer = doc.get_page(page1).get_layer(layer1);
     let left_margin: Mm = Pt(54.0).into();
@@ -236,10 +270,6 @@ fn gen_pdf(receipt: &ReceiptInfo) -> Result<PdfDocumentReference, Box<dyn Error>
     current_layer.use_text(company_info, 18.0, Pt(228.0).into(), Pt(690.0).into(), &font_regular);
 
     // Add logo
-    let mut svg_file = File::open("logo.svg")?;
-    let mut buf = String::new();
-    svg_file.read_to_string(&mut buf).unwrap();
-    let logo_svg = printpdf::Svg::parse(&buf).unwrap();
     let logo_transform = SvgTransform {
         translate_x: Some(Pt(55.0)),
         translate_y: Some(Pt(682.0)),
@@ -248,7 +278,7 @@ fn gen_pdf(receipt: &ReceiptInfo) -> Result<PdfDocumentReference, Box<dyn Error>
         scale_y: Some(0.65),
         dpi: None,
     };
-    logo_svg.add_to_layer(&current_layer, logo_transform);
+    resources.logo.clone().add_to_layer(&current_layer, logo_transform);
     
 
     // Box for headers1
@@ -409,16 +439,15 @@ fn gen_pdf(receipt: &ReceiptInfo) -> Result<PdfDocumentReference, Box<dyn Error>
 }
 
 fn parse_html(filename: &str) -> Result<ReceiptInfo, Box<dyn std::error::Error>> {
-    let mut buf = String::new();
-    {
-        let mut mail_file = File::open(filename)?;
-        let _ = mail_file.read_to_string(&mut buf)?;
-    }
-    let start_delimiter = "<Html>";
-    let end_delimiter = "</Html>";
-    let start_index = buf.find(start_delimiter).unwrap();
-    let end_index = buf.find(end_delimiter).unwrap() + end_delimiter.len();
-    let html_doc = &buf[start_index..end_index];
+    const START_DELIM: &str = "<Html>";
+    const END_DELIM: &str = "</Html>";
+    let mail = fs::read_to_string(filename)?;
+    let start_index = mail.find(START_DELIM)
+        .context("No opening HTML tag found in the mail file")?;
+    let end_index = mail.find(END_DELIM)
+        .context("No closing HTML tag found in the mail file")?
+        + END_DELIM.len();
+    let html_doc = &mail[start_index..end_index];
     let doc = Html::parse_document(html_doc);
 
     // Create all selectors
@@ -585,7 +614,6 @@ fn parse_html(filename: &str) -> Result<ReceiptInfo, Box<dyn std::error::Error>>
             receipt_info.slogan = table_nine.select(&td_selector).next().unwrap().text().next().unwrap().to_owned();
         }
     }
-    dbg!(&receipt_info);
     return Ok(receipt_info);
 }
 
