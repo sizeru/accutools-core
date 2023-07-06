@@ -2,8 +2,7 @@ use printpdf::{PdfDocument, PdfDocumentReference, Mm, PdfLayerReference, Point, 
 use scraper::{Html, Selector};
 use std::{env, fs::{File, self, read_dir}, io::BufWriter, sync::Arc};
 use anyhow::{Error, Result, Context};
-use daemonize::Daemonize;
-// use kqueue::Watcher;
+use kqueue::{Watcher, EventFilter, FilterFlag};
 
 
 const MAX_DESC_LENGTH: usize = 23;
@@ -206,67 +205,55 @@ impl PdfResources {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-
-    // let daemonize = Daemonize::new()
-    //     .pid_file("/tmp/rcptd.pid") // Every method except `new` and `start`
-    //     .chown_pid_file(true)      // is optional, see `Daemonize` documentation
-    //     .working_directory("/tmp") // for default behaviour.
-    //     .user("_rcptd")
-    //     .group("_rcptd")
-    //     .umask(0o770)    // Set umask, `0o027` by default.
-    //     .privileged_action(|| "Executed before drop privileges");
-
-    // match daemonize.start() {
-    //     Ok(_) => println!("Success, daemonized"),
-    //     Err(e) => eprintln!("Error, {}", e),
-    // }
-    // let mut watcher = kqueue::Watcher::new()?;
-    // loop {
-    //     let event = match watcher.poll_forever(None) {
-    //         None => continue,
-    //         Some(event) => event,
-    //     };
-
-    // }
-
+    let tempdir = "/tmp/receiptd";
+    fs::create_dir_all(&tempdir).unwrap();
     let args: Vec<String> = env::args().collect();
-    let input_file = args.get(1).unwrap();
-    let output_file = if let Some(output_file) = args.get(2) {
-        output_file
-    } else {
-        "receipt.pdf"
-    };
-
-    // We preload these resources so we don't do repetitive IO during runtime
-    // let now = std::time::Instant::now();
-    let mailpath = std::path::Path::new("new");
+    let mail_dir = args.get(1).unwrap();
+    let mut watcher = kqueue::Watcher::new()?;
     let pdf_resources = PdfResources::load()?;
-    // println!("Resources loaded: {:?}", now.elapsed());
-    let mut i = 0;
-    for file in fs::read_dir(mailpath).unwrap() {
-        println!("");
-        let now = std::time::Instant::now();
-        i+=1;
-        let entry = file.unwrap().path();
-        let pdf_file = entry.to_str().unwrap();
-        let receipt = parse_html(pdf_file);
-        println!("Receipt parsed: {:?}", now.elapsed());
-        if let Err(err) = receipt {
-            println!("{err:?}");
-            continue;
+    let mail_file = File::open(mail_dir)?;
+    watcher.add_file(&mail_file, EventFilter::EVFILT_VNODE, FilterFlag::NOTE_WRITE);
+    watcher.watch();
+    loop {
+        let event = match watcher.poll_forever(None) {
+            None => continue,
+            Some(event) => event,
+        };
+        let mut i = 0;
+        for file in fs::read_dir(mail_dir).unwrap() {
+            println!("");
+            let now = std::time::Instant::now();
+            i+=1;
+            let entry = file.unwrap().path();
+            let pdf_file = entry.to_str().unwrap();
+            let receipt = parse_html(pdf_file);
+            println!("Receipt parsed: {:?}", now.elapsed());
+            if let Err(err) = receipt {
+                println!("{err:?}");
+                continue;
+            }
+            let receipt = receipt.unwrap();
+            let doc = gen_pdf(&receipt, &pdf_resources); 
+            println!("Doc structure created: {:?}", now.elapsed());
+            if let Err(err) = doc {
+                println!("{err:?}");
+                continue;
+            }
+            let doc = doc.unwrap();
+            let save_file = match File::create(format!("{tempdir}/{i}.pdf")) {
+                Ok(file) => file,
+                Err(err) => {
+                    println!("{err:?}");
+                    continue;
+                },
+            };
+            if doc.save(&mut BufWriter::new(save_file)).is_err() {
+                println!("Couldn't save into buf UGH");
+            }
+            println!("Doc saved: {:?}", now.elapsed());
         }
-        let receipt = receipt.unwrap();
-        let doc = gen_pdf(&receipt, &pdf_resources); 
-        println!("Doc structure created: {:?}", now.elapsed());
-        if let Err(err) = doc {
-            println!("{err:?}");
-            continue;
-        }
-        let doc = doc.unwrap();
-        doc.save(&mut BufWriter::new(File::create(format!("res/{i}.pdf")).unwrap())).unwrap();
-        println!("Doc saved: {:?}", now.elapsed());
     }
-    Ok(())
+    return Ok(());
 }
 
 fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDocumentReference, Error> {
