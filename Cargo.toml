@@ -7,5 +7,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.71"
+daemonize = "0.5.0"
+kqueue = "1.0.7"
 printpdf = { git = "https://github.com/sizeru/printpdf", features = ["svg"] }
 scraper = "0.17.1"

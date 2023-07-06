@@ -2,6 +2,9 @@ use printpdf::{PdfDocument, PdfDocumentReference, Mm, PdfLayerReference, Point, 
 use scraper::{Html, Selector};
 use std::{env, fs::{File, self, read_dir}, io::BufWriter, sync::Arc};
 use anyhow::{Error, Result, Context};
+use daemonize::Daemonize;
+// use kqueue::Watcher;
+
 
 const MAX_DESC_LENGTH: usize = 23;
 macro_rules! lpad {
@@ -203,6 +206,29 @@ impl PdfResources {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+
+    // let daemonize = Daemonize::new()
+    //     .pid_file("/tmp/rcptd.pid") // Every method except `new` and `start`
+    //     .chown_pid_file(true)      // is optional, see `Daemonize` documentation
+    //     .working_directory("/tmp") // for default behaviour.
+    //     .user("_rcptd")
+    //     .group("_rcptd")
+    //     .umask(0o770)    // Set umask, `0o027` by default.
+    //     .privileged_action(|| "Executed before drop privileges");
+
+    // match daemonize.start() {
+    //     Ok(_) => println!("Success, daemonized"),
+    //     Err(e) => eprintln!("Error, {}", e),
+    // }
+    // let mut watcher = kqueue::Watcher::new()?;
+    // loop {
+    //     let event = match watcher.poll_forever(None) {
+    //         None => continue,
+    //         Some(event) => event,
+    //     };
+
+    // }
+
     let args: Vec<String> = env::args().collect();
     let input_file = args.get(1).unwrap();
     let output_file = if let Some(output_file) = args.get(2) {
@@ -212,10 +238,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // We preload these resources so we don't do repetitive IO during runtime
-    let now = std::time::Instant::now();
+    // let now = std::time::Instant::now();
     let mailpath = std::path::Path::new("new");
     let pdf_resources = PdfResources::load()?;
-    println!("Resources loaded: {:?}", now.elapsed());
+    // println!("Resources loaded: {:?}", now.elapsed());
     let mut i = 0;
     for file in fs::read_dir(mailpath).unwrap() {
         println!("");
