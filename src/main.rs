@@ -1,15 +1,29 @@
 use printpdf::{PdfDocument, PdfDocumentReference, Mm, PdfLayerReference, Point, Line, Pt, SvgTransform, Svg};
 use scraper::{Html, Selector};
-use std::{env, fs::{File, self, read_dir}, io::BufWriter, sync::Arc};
-use anyhow::{Error, Result, Context};
+use std::{env, path::Path, fs::{File, self}, sync::Arc};
+use anyhow::{Error, Result, Context, anyhow};
 use kqueue::{Watcher, EventFilter, FilterFlag};
-
+use regex::{RegexBuilder, Regex};
+use reqwest::{header::*};
 
 const MAX_DESC_LENGTH: usize = 23;
 macro_rules! lpad {
     ($arg:expr) => {{
         format!("{:>12}", $arg)
     }}
+}
+
+struct Delims {
+    start: Regex,
+    end: Regex,
+}
+
+struct Selectors {
+    body: Selector,
+    span: Selector,
+    table: Selector,
+    tr: Selector,
+    td: Selector,
 }
 
 #[derive(Debug)]
@@ -204,56 +218,200 @@ impl PdfResources {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let tempdir = "/tmp/receiptd";
-    fs::create_dir_all(&tempdir).unwrap();
-    let args: Vec<String> = env::args().collect();
-    let mail_dir = args.get(1).unwrap();
-    let mut watcher = kqueue::Watcher::new()?;
-    let pdf_resources = PdfResources::load()?;
-    let mail_file = File::open(mail_dir)?;
-    watcher.add_file(&mail_file, EventFilter::EVFILT_VNODE, FilterFlag::NOTE_WRITE);
-    watcher.watch();
-    loop {
-        let event = match watcher.poll_forever(None) {
-            None => continue,
-            Some(event) => event,
+struct Config {
+    watch_dir: String,
+    output_dir: Option<String>,
+    token: Option<String>,
+    post_to: Option<String>,
+}
+
+impl Config {
+    pub fn parse<P: AsRef<Path>>(file: P) -> Result<Self, Error> {
+        let config = Self::load(file)?;
+        config.validate()?;
+        return Ok(config);
+    }
+
+    fn load<P: AsRef<Path>>(file: P) -> Result<Self, Error> {
+        let mut config = Self {
+            watch_dir: String::new(), 
+            output_dir: None,
+            token: None,
+            post_to: None,
         };
-        let mut i = 0;
-        for file in fs::read_dir(mail_dir).unwrap() {
-            println!("");
-            let now = std::time::Instant::now();
-            i+=1;
-            let entry = file.unwrap().path();
-            let pdf_file = entry.to_str().unwrap();
-            let receipt = parse_html(pdf_file);
-            println!("Receipt parsed: {:?}", now.elapsed());
-            if let Err(err) = receipt {
-                println!("{err:?}");
-                continue;
+        let contents = fs::read_to_string(file)?;
+        let re = Regex::new(r#"^(\S*)\s*=\s*([^#\n]*).*$"#)?;
+        for capture in re.captures_iter(&contents) {
+            let key = capture.get(1).context("No key?")?;
+            let value = capture.get(2).context("No value")?;
+            let value_string = value.as_str().trim_end().to_owned();
+            match key.as_str() {
+                "watch_dir" => config.watch_dir = value_string,
+                "output_dir" => config.output_dir = Some(value_string),
+                "token" => config.token = Some(value_string),
+                "post_to" => config.post_to = Some(value_string),
+                _ => return Err(anyhow!("Unknown key in config")),
             }
-            let receipt = receipt.unwrap();
-            let doc = gen_pdf(&receipt, &pdf_resources); 
-            println!("Doc structure created: {:?}", now.elapsed());
-            if let Err(err) = doc {
-                println!("{err:?}");
-                continue;
+        }
+        return Ok(config);
+    }
+
+    fn validate(&self) -> Result<(), Error> {
+        if self.watch_dir.is_empty() {
+            return Err(anyhow!("no watch dir provided"));
+        }
+        let watch_dir = Path::new(&self.watch_dir);
+        if !watch_dir.exists() || !watch_dir.is_dir() {
+            return Err(anyhow!("The watch dir does not exist or is not an accessible directory"));
+        }
+        if let Some(string) = self.output_dir.as_ref() {
+            let output_dir = Path::new(string);
+            if !output_dir.exists() || !output_dir.is_dir() {
+                return Err(anyhow!("The output dir does not exist or is not an accessible directory"));
             }
-            let doc = doc.unwrap();
-            let save_file = match File::create(format!("{tempdir}/{i}.pdf")) {
-                Ok(file) => file,
-                Err(err) => {
-                    println!("{err:?}");
+        }
+        if let Some(string) = self.output_dir.as_ref() {
+            let output_dir = Path::new(string);
+            if !output_dir.exists() || !output_dir.is_dir() {
+                return Err(anyhow!("The output dir does not exist or is not an accessible directory"));
+            }
+        }
+        if self.output_dir.is_none() && self.post_to.is_none() {
+            return Err(anyhow!("No output dir or post address specified. A program should have some output"));
+        }
+        return Ok(())
+    }
+}
+
+const CONFIG_PATH: &str = "/etc/receiptd.conf";
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = env::args().collect();
+    if let Some(flag) = args.get(1) {
+        // Dry run. Check config is valid
+        if flag.eq("-n") {
+            let _ = Config::parse(CONFIG_PATH)?;
+            return Ok(());
+        }
+    }
+
+    let config = Config::parse("/etc/receiptd.conf")?;
+    if let Some(output_dir) = config.output_dir.as_ref() {
+        fs::create_dir_all(output_dir)?;
+    }
+    let pdf_resources = PdfResources::load()?;
+    let mail_dir_file = File::open(&config.watch_dir)?;
+    let delims = Delims {
+        start: RegexBuilder::new("<html>").case_insensitive(true).build()?,
+        end: RegexBuilder::new("</html>").case_insensitive(true).build()?,
+    };
+    let selectors = Selectors {
+        body: Selector::parse("body")?,
+        span: Selector::parse("span")?,
+        table: Selector::parse("table")?,
+        td: Selector::parse("td")?,
+        tr: Selector::parse("tr")?,
+    };
+    let client = {
+        if config.post_to.is_none() {
+            None
+        } else {
+            let mut default_headers = reqwest::header::HeaderMap::default();
+            if let Some(token) = config.token.as_ref() {
+                let name = HeaderName::from_static("token");
+                let value = HeaderValue::from_str(token)?;
+                default_headers.append(name, value);
+            }
+            let client = reqwest::Client::builder()
+                .default_headers(default_headers)
+                .build()?;
+            Some(client)
+        }
+    };
+    let mut watcher = Watcher::new()?;
+    watcher.add_file(&mail_dir_file, EventFilter::EVFILT_VNODE, FilterFlag::NOTE_WRITE)?;
+    watcher.watch()?;
+    loop {
+        if watcher.poll_forever(None).is_none() {
+            continue;
+        }
+        let dir = match fs::read_dir(&config.watch_dir) {
+            Ok(dir) => dir,
+            Err(_err) => continue,
+        };
+        for entry in dir {
+            let mail_path = match entry {
+                Ok(entry) => entry.path(),
+                Err(_err) => {
                     continue;
                 },
             };
-            if doc.save(&mut BufWriter::new(save_file)).is_err() {
-                println!("Couldn't save into buf UGH");
+            let mut save = false;
+            let mut send = false;
+            if let Some(extension) = mail_path.extension() {
+                save = config.output_dir.is_some() && extension.ne("saved") && extension.ne("sent"); 
+                send = config.post_to.is_some() && extension.ne("sent");
             }
-            println!("Doc saved: {:?}", now.elapsed());
+            let receipt = match parse_html(&mail_path, &delims, &selectors) {
+                Ok(receipt) => receipt,
+                Err(_err) => {
+                    let mut new_name = mail_path.clone();
+                    new_name.set_extension("noparse");
+                    let _ = fs::rename(mail_path, new_name);
+                    continue;
+                },
+            };
+            let doc = match gen_pdf(&receipt, &pdf_resources) {
+                Ok(doc) => doc,
+                Err(_err) => {
+                    let mut new_name = mail_path.clone();
+                    new_name.set_extension("nogen");
+                    let _ = fs::rename(mail_path, new_name);
+                    continue;
+                },
+            }; 
+            let mail_file_name = match mail_path.file_name() {
+                Some(name) => name,
+                None => {
+                    let mut new_name = mail_path.clone();
+                    new_name.set_extension("noname");
+                    let _ = fs::rename(mail_path, new_name);
+                    continue;
+                }
+            };
+            let pdf = match doc.save_to_bytes() {
+                Ok(bytes) => bytes,
+                Err(_err) => {
+                    let mut new_name = mail_path.clone();
+                    new_name.set_extension("nosave");
+                    let _ = fs::rename(mail_path, new_name);
+                    continue;
+                }
+            };
+            if save {
+                let output_dir = unsafe {config.output_dir.as_ref().unwrap_unchecked()};
+                let output_dir = Path::new(output_dir);
+                let mut save_path = output_dir.join(mail_file_name);
+                save_path.set_extension("pdf");
+                if fs::write(save_path, &pdf[..]).is_err() {
+                    let mut new_name = mail_path.clone();
+                    new_name.set_extension("nowrite");
+                    let _ = fs::rename(mail_path, new_name);
+                    continue;
+                };
+            }
+            if send {
+                let client = unsafe {client.as_ref().unwrap_unchecked()};
+                let post_to = unsafe {config.post_to.as_ref().unwrap_unchecked()};
+                let reponse = client
+                    .post(post_to)
+                    .body(pdf)
+                    .send()
+                    .await?;
+            }
         }
     }
-    return Ok(());
 }
 
 fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDocumentReference, Error> {
@@ -451,61 +609,60 @@ fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDocumen
     return Ok(doc);
 }
 
-fn parse_html(filename: &str) -> Result<ReceiptInfo, Box<dyn std::error::Error>> {
-    const START_DELIM: &str = "<Html>";
-    const END_DELIM: &str = "</Html>";
+fn parse_html<P:>(filename: P, delims: &Delims, selectors: &Selectors) -> Result<ReceiptInfo, Box<dyn std::error::Error>> 
+where 
+     P: AsRef<std::path::Path>
+{
     let mail = fs::read_to_string(filename)?;
-    let start_index = mail.find(START_DELIM)
-        .context("No opening HTML tag found in the mail file")?;
-    let end_index = mail.find(END_DELIM)
-        .context("No closing HTML tag found in the mail file")?
-        + END_DELIM.len();
+    let start_index = {
+        let captures = delims.start.find(&mail)
+            .context("No opening HTML tag found in the file")?;
+        captures.start()
+    };
+    let end_index = {
+        let captures = delims.end.find_at(&mail, start_index)
+            .context("No opening HTML tag found in the file")?;
+        captures.end()
+    };
     let html_doc = &mail[start_index..end_index];
     let doc = Html::parse_document(html_doc);
 
-    // Create all selectors
-    let body_selector = Selector::parse("body").unwrap();
-    let span_selector = Selector::parse("span").unwrap();
-    let table_selector = Selector::parse("table").unwrap();
-    let td_selector = Selector::parse("td").unwrap();
-    let tr_selector = Selector::parse("tr").unwrap();
-
     let mut receipt_info = ReceiptInfo::new();
     // Everything should be in the body. This is a safety check
-    let body = doc.select(&body_selector).next().unwrap();
+    let body = doc.select(&selectors.body).next().context("No body tag found")?;
 
     // First two strong tags are title and datetime
-    let mut span_elements = body.select(&span_selector);
-    receipt_info.title = span_elements.next().unwrap().text().cleanup();
-    receipt_info.date = span_elements.next().unwrap().text().cleanup();
+    let mut span_elements = body.select(&selectors.span);
+    receipt_info.title = span_elements.next().context("No title found")?.text().cleanup();
+    receipt_info.date = span_elements.next().context("No date found")?.text().cleanup();
     drop(span_elements);
 
     // Everything else in document is in tables
     {
-        let mut tables = body.select(&table_selector);
+        let mut tables = body.select(&selectors.table);
         {
             // Table one is Company name, Customer name, and order metadata
-            let first_table = tables.next().unwrap();
-            let mut rows = first_table.select(&tr_selector);
+            let first_table = tables.next().context("Table does not exist")?;
+            let mut rows = first_table.select(&selectors.tr);
             {
-                let company_and_customer_row = rows.next().unwrap();
-                let mut tds = company_and_customer_row.select(&td_selector);
+                let company_and_customer_row = rows.next().context("No company and customer row found")?;
+                let mut tds = company_and_customer_row.select(&selectors.td);
                 receipt_info.company_info = tds
                     .next()
-                    .unwrap()
+                    .context("No company info found")?
                     .text()
                     .cleanup_multiple_lines();
                 receipt_info.customer_info = tds
                     .next()
-                    .unwrap()
+                    .context("No customer info found")?
                     .text()
                     .cleanup_multiple_lines();
             }
-            let _ = rows.next().unwrap(); // blank
+            let _ = rows.next().context("Expected to find a blank row but there was none")?; // blank
             {
-                let metadata = rows.next().unwrap();
-                let mut tds = metadata.select(&td_selector);
-                let tnum = tds.next().unwrap().text().cleanup();
+                let metadata = rows.next().context("No metadata row found")?;
+                let mut tds = metadata.select(&selectors.td);
+                let tnum = tds.next().context("No transaction number found")?.text().cleanup();
                 let tnum_prefix = "TransactionNumber: ";
                 receipt_info.transaction_number = if tnum.starts_with(tnum_prefix) {
                     tnum[tnum_prefix.len()..].to_owned()
@@ -513,7 +670,7 @@ fn parse_html(filename: &str) -> Result<ReceiptInfo, Box<dyn std::error::Error>>
                     tnum
                 };
 
-                let order_id = tds.next().unwrap().text().cleanup();
+                let order_id = tds.next().context("No order id found")?.text().cleanup();
                 let oid_prefix = "OrderId: ";
                 receipt_info.order_id = if order_id.starts_with(oid_prefix) {
                     order_id[oid_prefix.len()..].to_owned()
@@ -521,7 +678,7 @@ fn parse_html(filename: &str) -> Result<ReceiptInfo, Box<dyn std::error::Error>>
                     order_id
                 };
 
-                let invnum = tds.next().unwrap().text().cleanup();
+                let invnum = tds.next().context("No invoice number found")?.text().cleanup();
                 let invnum_prefix = "Invoice#: ";
                 receipt_info.invoice_number = if invnum.starts_with(invnum_prefix) {
                     invnum[invnum_prefix.len()..].to_owned()
@@ -531,19 +688,19 @@ fn parse_html(filename: &str) -> Result<ReceiptInfo, Box<dyn std::error::Error>>
             }
         }
         // Table two contains table headers. Not used.
-        let _ = tables.next().unwrap();
+        let _ = tables.next().context("Table does not exist")?;
         {
             // Table three contains item lines
-            let table_three = tables.next().unwrap();
+            let table_three = tables.next().context("Table does not exist")?;
             let mut dt_nums = Vec::new();
             let mut wt_nums = Vec::new();
-            for row in table_three.select(&tr_selector) {
-                let mut tds = row.select(&td_selector);
-                let code        = tds.next().unwrap().text().next().unwrap().to_owned();
-                let description = tds.next().unwrap().text().next().unwrap().to_owned();
-                let quantity    = tds.next().unwrap().text().next().unwrap().to_owned();
-                let price       = tds.next().unwrap().text().cleanup_amount();
-                let amount      = tds.next().unwrap().text().cleanup_amount();
+            for row in table_three.select(&selectors.tr) {
+                let mut tds = row.select(&selectors.td);
+                let code        = tds.next().context("No code in item line")?.text().cleanup();
+                let description = tds.next().context("No description in item line")?.text().cleanup();
+                let quantity    = tds.next().context("No quantity in item line")?.text().cleanup();
+                let price       = tds.next().context("No price in item line")?.text().cleanup_amount();
+                let amount      = tds.next().context("No amount in item line")?.text().cleanup_amount();
                 if code.eq("2300") {
                     dt_nums.push(description);
                 } else if code.eq("2301") {
@@ -578,16 +735,16 @@ fn parse_html(filename: &str) -> Result<ReceiptInfo, Box<dyn std::error::Error>>
             receipt_info.weigh_tickets.pop();
         }
         // Table 4 is empty
-        let _ = tables.next().unwrap();
+        let _ = tables.next().context("Table does not exist")?;
         {
             // Table 5 is subtotal, tax, total
-            let table_five = tables.next().unwrap();
-            for row in table_five.select(&tr_selector) {
-                let mut tds = row.select(&td_selector);
+            let table_five = tables.next().context("Table does not exist")?;
+            for row in table_five.select(&selectors.tr) {
+                let mut tds = row.select(&selectors.td);
                 receipt_info.totals.push(
                     Amount {
-                        name: tds.next().unwrap().text().next().unwrap().to_owned(),
-                        value: tds.next().unwrap().text().cleanup_amount(),
+                        name: tds.next().context("Subtotal line present but no name")?.text().cleanup(),
+                        value: tds.next().context("Subtotal line present but no value")?.text().cleanup_amount(),
                     }
                 )
                 
@@ -595,36 +752,38 @@ fn parse_html(filename: &str) -> Result<ReceiptInfo, Box<dyn std::error::Error>>
         }
         {
             // Table 6 is Payments
-            let table_six = tables.next().unwrap();
-            for row in table_six.select(&tr_selector) {
-                let mut tds = row.select(&td_selector);
+            let table_six = tables.next().context("Table does not exist")?;
+            for row in table_six.select(&selectors.tr) {
+                let mut tds = row.select(&selectors.td);
                 receipt_info.payments.push(
                     Amount {
-                        name:  tds.next().unwrap().text().cleanup(),
-                        value: tds.next().unwrap().text().cleanup_amount(),
+                        name:  tds.next().context("Payment line present but no name")?.text().cleanup(),
+                        value: tds.next().context("Payment line present but no value")?.text().cleanup_amount(),
                     }
                 )
             }
         }
         {
             // Table seven is Amount Due from customer
-            let table_seven = tables.next().unwrap();
-            let mut tds = table_seven.select(&td_selector);
+            let table_seven = tables.next().context("Table does not exist")?;
+            let mut tds = table_seven.select(&selectors.td);
             let _empty = tds.next();
             let _name = tds.next();
-            let amount = tds.next().unwrap().text().cleanup_amount();
+
+            let amount = tds.next().context("No Amount Due")?.text().cleanup_amount();
         }
         {
             // Table eight is Employee Name
-            let table_eight = tables.next().unwrap();
-            let mut tds = table_eight.select(&td_selector);
+            let table_eight = tables.next().context("Table does not exist")?;
+            let mut tds = table_eight.select(&selectors.td);
             let _employee_label = tds.next();
-            receipt_info.employee = tds.next().unwrap().text().cleanup();
+            receipt_info.employee = tds.next().context("No employee found")?.text().cleanup();
         }
         {
             // Table nine is Footer With Slogan
-            let table_nine = tables.next().unwrap();
-            receipt_info.slogan = table_nine.select(&td_selector).next().unwrap().text().next().unwrap().to_owned();
+            let table_nine = tables.next().context("Table does not exist")?;
+            let td = table_nine.select(&selectors.td).next().context("No td")?;
+            receipt_info.slogan = td.text().cleanup();
         }
     }
     return Ok(receipt_info);
@@ -639,7 +798,7 @@ fn split_into_lines(string: &str, max_length: usize) -> Vec<String> {
     }
 
     lines.push(string.to_owned());
-    while lines.last().unwrap().len() > max_length {
+    while unsafe { lines.last().unwrap_unchecked().len() } > max_length {
         let last_line = unsafe { lines.pop().unwrap_unchecked() };
         let final_whitespace = &last_line[..max_length+1]
             .chars()
