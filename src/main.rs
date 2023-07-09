@@ -201,7 +201,7 @@ struct PdfResources {
 
 impl PdfResources {
     pub fn load(config: &Config) -> Result<Self, Error> {
-        const DATA_DIR: &str = "/var/receiptd"
+        const DATA_DIR: &str = "/var/receiptd";
         let font_regular = fs::read(&format!("{DATA_DIR}/fonts/NotoSans-Regular.ttf"))?;
         let font_bold = fs::read(&format!("{DATA_DIR}/fonts/NotoSans-Bold.ttf"))?;
         let font_mono = fs::read(&format!("{DATA_DIR}/fonts/NotoSansMono-Regular.tff"))?;
@@ -216,9 +216,9 @@ impl PdfResources {
             font_regular: Arc::from(font_regular),
             font_bold: Arc::from(font_bold),
             font_mono: Arc::from(font_mono),
-            logo
-            company_name: config.company_name,
-            company_info: config.company_info,
+            logo,
+            company_name: config.company_name.clone(),
+            company_info: config.company_info.clone(),
         });
     }
 }
@@ -245,6 +245,8 @@ impl Config {
             output_dir: None,
             token: None,
             post_to: None,
+            company_name: String::new(),
+            company_info: String::new(),
         };
         let contents = fs::read_to_string(file)?;
         let re = Regex::new(r#"^(\S*)\s*=\s*([^#\n]*).*$"#)?;
@@ -285,12 +287,7 @@ impl Config {
                 return Err(anyhow!("The output dir does not exist or is not an accessible directory"));
             }
         }
-        if self.output_dir.is_no
-
-
-
-
-        ne() && self.post_to.is_none() {
+        if self.output_dir.is_none() && self.post_to.is_none() {
             return Err(anyhow!("No output dir or post address specified. A program should have some output"));
         }
         return Ok(())
@@ -314,7 +311,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(output_dir) = config.output_dir.as_ref() {
         fs::create_dir_all(output_dir)?;
     }
-    let pdf_resources = PdfResources::load()?;
+    let pdf_resources = PdfResources::load(&config)?;
     let mail_dir_file = File::open(&config.watch_dir)?;
     let delims = Delims {
         start: RegexBuilder::new("<html>").case_insensitive(true).build()?,
@@ -449,8 +446,8 @@ fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDocumen
     current_layer.use_text("Customer Invoice", 14.0, Pt(260.0).into(), Pt(750.0).into(), &font_bold);
 
     // Add company header
-    current_layer.use_text(company, 28.0, Pt(225.0).into(), Pt(712.0).into(), &font_bold);
-    current_layer.use_text(company_info, 18.0, Pt(228.0).into(), Pt(690.0).into(), &font_regular);
+    current_layer.use_text(&resources.company_name, 28.0, Pt(225.0).into(), Pt(712.0).into(), &font_bold);
+    current_layer.use_text(&resources.company_info, 18.0, Pt(228.0).into(), Pt(690.0).into(), &font_regular);
 
     // Add logo
     let logo_transform = SvgTransform {
