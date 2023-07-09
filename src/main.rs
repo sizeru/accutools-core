@@ -195,15 +195,18 @@ struct PdfResources {
     font_bold: Arc<[u8]>,
     font_mono: Arc<[u8]>,
     logo: Svg,
+    company_name: String,
+    company_info: String,
 }
 
 impl PdfResources {
-    pub fn load() -> Result<Self, Error> {
-        let font_regular = fs::read("fonts/NotoSans-Regular.ttf")?;
-        let font_bold = fs::read("fonts/NotoSans-Bold.ttf")?;
-        let font_mono = fs::read("fonts/NotoSansMono-Regular.tff")?;
+    pub fn load(config: &Config) -> Result<Self, Error> {
+        const DATA_DIR: &str = "/var/receiptd"
+        let font_regular = fs::read(&format!("{DATA_DIR}/fonts/NotoSans-Regular.ttf"))?;
+        let font_bold = fs::read(&format!("{DATA_DIR}/fonts/NotoSans-Bold.ttf"))?;
+        let font_mono = fs::read(&format!("{DATA_DIR}/fonts/NotoSansMono-Regular.tff"))?;
         let logo = {
-            let svg = fs::read_to_string("logo.svg")?;
+            let svg = fs::read_to_string(&format!("{DATA_DIR}/logo.svg"))?;
             Svg::parse(&svg)?
         };
         // Converting from Vec to Arc doesn't reallocate the memory. Party!
@@ -214,6 +217,8 @@ impl PdfResources {
             font_bold: Arc::from(font_bold),
             font_mono: Arc::from(font_mono),
             logo
+            company_name: config.company_name,
+            company_info: config.company_info,
         });
     }
 }
@@ -223,6 +228,8 @@ struct Config {
     output_dir: Option<String>,
     token: Option<String>,
     post_to: Option<String>,
+    company_name: String,
+    company_info: String,
 }
 
 impl Config {
@@ -250,6 +257,8 @@ impl Config {
                 "output_dir" => config.output_dir = Some(value_string),
                 "token" => config.token = Some(value_string),
                 "post_to" => config.post_to = Some(value_string),
+                "company_name" => config.company_name = value_string,
+                "company_info" => config.company_info = value_string,
                 _ => return Err(anyhow!("Unknown key in config")),
             }
         }
@@ -276,7 +285,12 @@ impl Config {
                 return Err(anyhow!("The output dir does not exist or is not an accessible directory"));
             }
         }
-        if self.output_dir.is_none() && self.post_to.is_none() {
+        if self.output_dir.is_no
+
+
+
+
+        ne() && self.post_to.is_none() {
             return Err(anyhow!("No output dir or post address specified. A program should have some output"));
         }
         return Ok(())
@@ -435,8 +449,6 @@ fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDocumen
     current_layer.use_text("Customer Invoice", 14.0, Pt(260.0).into(), Pt(750.0).into(), &font_bold);
 
     // Add company header
-    let company = "***REMOVED***";
-    let company_info = "***REMOVED*** • ***REMOVED*** • ***REMOVED***";
     current_layer.use_text(company, 28.0, Pt(225.0).into(), Pt(712.0).into(), &font_bold);
     current_layer.use_text(company_info, 18.0, Pt(228.0).into(), Pt(690.0).into(), &font_regular);
 
