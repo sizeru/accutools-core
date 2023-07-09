@@ -1,5 +1,5 @@
 [package]
-name = "rcptd"
+name = "receiptd"
 version = "0.1.0"
 edition = "2021"
 
