@@ -1,10 +1,11 @@
 use printpdf::{PdfDocument, PdfDocumentReference, Mm, PdfLayerReference, Point, Line, Pt, SvgTransform, Svg};
 use scraper::{Html, Selector};
-use std::{env, path::Path, fs::{File, self}, sync::Arc};
+use std::{env, path::Path, fs::{File, self}, sync::Arc, process::exit};
 use anyhow::{Error, Result, Context, anyhow};
 use kqueue::{Watcher, EventFilter, FilterFlag};
 use regex::{RegexBuilder, Regex};
 use reqwest::{header::*};
+use daemonize::Daemonize;
 
 const MAX_DESC_LENGTH: usize = 23;
 macro_rules! lpad {
@@ -206,7 +207,8 @@ impl PdfResources {
         let font_bold = fs::read(&format!("{DATA_DIR}/fonts/NotoSans-Bold.ttf"))?;
         let font_mono = fs::read(&format!("{DATA_DIR}/fonts/NotoSansMono-Regular.tff"))?;
         let logo = {
-            let svg = fs::read_to_string(&format!("{DATA_DIR}/logo.svg"))?;
+            let svg = fs::read_to_string(&format!("{DATA_DIR}/logo.svg"))
+                .context(format!("No logo.svg found in {DATA_DIR}"))?;
             Svg::parse(&svg)?
         };
         // Converting from Vec to Arc doesn't reallocate the memory. Party!
@@ -223,6 +225,7 @@ impl PdfResources {
     }
 }
 
+#[derive(Debug)]
 struct Config {
     watch_dir: String,
     output_dir: Option<String>,
@@ -249,7 +252,9 @@ impl Config {
             company_info: String::new(),
         };
         let contents = fs::read_to_string(file)?;
-        let re = Regex::new(r#"^(\S*)\s*=\s*([^#\n]*).*$"#)?;
+        let re = RegexBuilder::new(r#"^([^\s#]*)\s*=\s*([^#\n]*)$"#)
+            .multi_line(true)
+            .build()?;
         for capture in re.captures_iter(&contents) {
             let key = capture.get(1).context("No key?")?;
             let value = capture.get(2).context("No value")?;
@@ -261,7 +266,7 @@ impl Config {
                 "post_to" => config.post_to = Some(value_string),
                 "company_name" => config.company_name = value_string,
                 "company_info" => config.company_info = value_string,
-                _ => return Err(anyhow!("Unknown key in config")),
+                _ => return Err(anyhow!("Unknown key in config: {}, {}", key.as_str(), value_string)),
             }
         }
         return Ok(config);
@@ -303,15 +308,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Dry run. Check config is valid
         if flag.eq("-n") {
             let _ = Config::parse(CONFIG_PATH)?;
-            return Ok(());
+            exit(0);
         }
     }
 
     let config = Config::parse("/etc/receiptd.conf")?;
-    if let Some(output_dir) = config.output_dir.as_ref() {
-        fs::create_dir_all(output_dir)?;
-    }
     let pdf_resources = PdfResources::load(&config)?;
+    
+    let daemonize = Daemonize::new()
+        .pid_file("/var/run/receiptd.pid") // Every method except `new` and `start`
+        .chown_pid_file(true)      // is optional, see `Daemonize` documentation
+        .working_directory("/tmp") // for default behaviour.
+        .user("receiptd")
+        .group("receiptd");
+    match daemonize.start() {
+        Ok(_) => (),
+        Err(e) => eprintln!("Error, {}", e),
+    }
+
     let mail_dir_file = File::open(&config.watch_dir)?;
     let delims = Delims {
         start: RegexBuilder::new("<html>").case_insensitive(true).build()?,
@@ -369,7 +383,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(_err) => {
                     let mut new_name = mail_path.clone();
                     new_name.set_extension("noparse");
-                    let _ = fs::rename(mail_path, new_name);
+                    let _ = fs::rename(&mail_path, &new_name);
                     continue;
                 },
             };
@@ -378,7 +392,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(_err) => {
                     let mut new_name = mail_path.clone();
                     new_name.set_extension("nogen");
-                    let _ = fs::rename(mail_path, new_name);
+                    let _ = fs::rename(&mail_path, &new_name);
                     continue;
                 },
             }; 
@@ -387,7 +401,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None => {
                     let mut new_name = mail_path.clone();
                     new_name.set_extension("noname");
-                    let _ = fs::rename(mail_path, new_name);
+                    let _ = fs::rename(&mail_path, &new_name);
                     continue;
                 }
             };
@@ -396,7 +410,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(_err) => {
                     let mut new_name = mail_path.clone();
                     new_name.set_extension("nosave");
-                    let _ = fs::rename(mail_path, new_name);
+                    let _ = fs::rename(&mail_path, &new_name);
                     continue;
                 }
             };
@@ -405,11 +419,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let output_dir = Path::new(output_dir);
                 let mut save_path = output_dir.join(mail_file_name);
                 save_path.set_extension("pdf");
-                if fs::write(save_path, &pdf[..]).is_err() {
-                    let mut new_name = mail_path.clone();
-                    new_name.set_extension("nowrite");
-                    let _ = fs::rename(mail_path, new_name);
-                    continue;
+                match fs::write(save_path, &pdf[..]) {
+                    Ok(()) => {
+                        let mut new_name = mail_path.clone();
+                        new_name.set_extension("saved");
+                        let _ = fs::rename(&mail_path, &new_name);
+                    },
+                    Err(err) => {
+                        let mut new_name = mail_path.clone();
+                        new_name.set_extension("nowrite");
+                        let _ = fs::rename(&mail_path, &new_name);
+                        continue;
+                    },
                 };
             }
             if send {
@@ -420,6 +441,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .body(pdf)
                     .send()
                     .await?;
+                let mut new_name = mail_path.clone();
+                new_name.set_extension("sent");
+                let _ = fs::rename(&mail_path, &new_name);
             }
         }
     }

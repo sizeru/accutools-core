@@ -6,8 +6,13 @@ useradd -b /nonexistent -c "PDF Receipt Making Daemon" -g=uid -L daemon -s /sbin
 
 mkdir -m 0755 -p /var/log/receiptd /var/receiptd
 chown receiptd:receiptd /var/log/receiptd /var/receiptd
-cp ../fonts/* /var/receiptd/
+
+cp -R ../fonts /var/receiptd/
+chmod -R 755 /var/receiptd
 
 cp receiptd.rc.d /etc/rc.d/receiptd
-chown 0555 /etc/rc.d/receiptd
+chmod 0555 /etc/rc.d/receiptd
+
+cp receiptd.conf /etc/receiptd.conf
+chmod 0664 /etc/receiptd.conf
 

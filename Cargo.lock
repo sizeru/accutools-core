@@ -1232,7 +1232,7 @@ checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 [[package]]
 name = "printpdf"
 version = "0.5.3"
-source = "git+https://github.com/sizeru/printpdf#cddd5eb88a52a4090c19f83672d5adcd2d00ef2d"
+source = "git+https://github.com/fschutt/printpdf#91ecbe4de266b996dbbdd9115ae16222870dd478"
 dependencies = [
  "js-sys",
  "lopdf",
