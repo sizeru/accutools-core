@@ -1,11 +1,6 @@
 #!/bin/ksh
 
-daemon="/usr/local/sbin/receiptd" 
+daemon="/usr/local/sbin/httpftd" 
 . /etc/rc.d/rc.subr
-
-rc_configtest() 
-{
-        ${daemon} -n
-}
 
 rc_cmd $1

@@ -1,6 +1,6 @@
 use printpdf::{PdfDocument, PdfDocumentReference, Mm, PdfLayerReference, Point, Line, Pt, SvgTransform, Svg};
 use scraper::{Html, Selector};
-use std::{env, path::Path, fs::{File, self}, sync::Arc, process::exit};
+use std::{env, path::Path, fs::{File, self}, os::unix::fs::*, sync::Arc};
 use anyhow::{Error, Result, Context, anyhow};
 use kqueue::{Watcher, EventFilter, FilterFlag};
 use regex::{RegexBuilder, Regex};
@@ -301,14 +301,13 @@ impl Config {
 
 const CONFIG_PATH: &str = "/etc/receiptd.conf";
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     if let Some(flag) = args.get(1) {
         // Dry run. Check config is valid
         if flag.eq("-n") {
             let _ = Config::parse(CONFIG_PATH)?;
-            exit(0);
+            return Ok(());
         }
     }
 
@@ -327,6 +326,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => eprintln!("Error, {}", e),
     }
 
+    run(config)?;
+    Ok(())
+}
+
+#[tokio::main]
+async fn run(config: Config) -> Result<(), Error> {
     let mail_dir_file = File::open(&config.watch_dir)?;
     let delims = Delims {
         start: RegexBuilder::new("<html>").case_insensitive(true).build()?,
@@ -355,6 +360,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(client)
         }
     };
+
     let mut watcher = Watcher::new()?;
     watcher.add_file(&mail_dir_file, EventFilter::EVFILT_VNODE, FilterFlag::NOTE_WRITE)?;
     watcher.watch()?;
@@ -410,7 +416,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(bytes) => bytes,
                 Err(_err) => {
                     let mut new_name = mail_path.clone();
-                    new_name.set_extension("nosave");
+                    new_name.set_extension("nobytes");
                     let _ = fs::rename(&mail_path, &new_name);
                     continue;
                 }
@@ -420,19 +426,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let output_dir = Path::new(output_dir);
                 let mut save_path = output_dir.join(mail_file_name);
                 save_path.set_extension("pdf");
-                match fs::write(save_path, &pdf[..]) {
-                    Ok(()) => {
-                        let mut new_name = mail_path.clone();
-                        new_name.set_extension("saved");
-                        let _ = fs::rename(&mail_path, &new_name);
+                let savefile = match fs::OpenOptions::new()
+                    .mode(0o664)
+                    .write(true)
+                    .create(create)
+                    .open(save_path) 
+                {
+                    Ok(file) => {
+                        file
                     },
                     Err(err) => {
                         let mut new_name = mail_path.clone();
-                        new_name.set_extension("nowrite");
+                        new_name.set_extension("nosave");
                         let _ = fs::rename(&mail_path, &new_name);
                         continue;
                     },
                 };
+                match savefile.write_all_at(&pdf[..], 0) {
+                    Ok(_) => {
+                        let mut new_name = mail_path.clone();
+                        new_name.set_extension("written");
+                        let _ = fs::rename(&mail_path, &new_name);
+                    },
+                    Err() => {
+                        let mut new_name = mail_path.clone();
+                        new_name.set_extension("nowrite");
+                        let _ = fs::rename(&mail_path, &new_name);
+                    }
+                }
             }
             if send {
                 let client = unsafe {client.as_ref().unwrap_unchecked()};
