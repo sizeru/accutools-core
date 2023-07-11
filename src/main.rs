@@ -326,12 +326,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => eprintln!("Error, {}", e),
     }
 
-    run(config)?;
+    run(config, pdf_resources)?;
     Ok(())
 }
 
 #[tokio::main]
-async fn run(config: Config) -> Result<(), Error> {
+async fn run(config: Config, pdf_resources: PdfResources) -> Result<(), Box<dyn std::error::Error>> {
     let mail_dir_file = File::open(&config.watch_dir)?;
     let delims = Delims {
         start: RegexBuilder::new("<html>").case_insensitive(true).build()?,
@@ -429,13 +429,13 @@ async fn run(config: Config) -> Result<(), Error> {
                 let savefile = match fs::OpenOptions::new()
                     .mode(0o664)
                     .write(true)
-                    .create(create)
+                    .create(true)
                     .open(save_path) 
                 {
                     Ok(file) => {
                         file
                     },
-                    Err(err) => {
+                    Err(_err) => {
                         let mut new_name = mail_path.clone();
                         new_name.set_extension("nosave");
                         let _ = fs::rename(&mail_path, &new_name);
@@ -448,7 +448,7 @@ async fn run(config: Config) -> Result<(), Error> {
                         new_name.set_extension("written");
                         let _ = fs::rename(&mail_path, &new_name);
                     },
-                    Err() => {
+                    Err(_err) => {
                         let mut new_name = mail_path.clone();
                         new_name.set_extension("nowrite");
                         let _ = fs::rename(&mail_path, &new_name);
