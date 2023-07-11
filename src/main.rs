@@ -319,7 +319,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     
     let daemonize = Daemonize::new()
-        .chroot(&root)
         .user("receiptd")
         .group("receiptd")
         .pid_file(PID_FILE)
@@ -341,7 +340,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match daemonize.start() {
         Ok(_) => info!("Daemonized with config: {:?}", &config),
         Err(e) => {
-            return Err(anyhow!(format!("Could not daemonize. Error: {e}")));
+            return Err(anyhow!(format!("Could not daemonize. Error: {e}")).into());
         },
     }
 
