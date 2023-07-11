@@ -319,8 +319,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     
     let daemonize = Daemonize::new()
-        .user("receiptd")
-        .group("receiptd")
         .pid_file(PID_FILE)
         .chown_pid_file(true)
         .umask(0o002)
@@ -409,7 +407,10 @@ async fn run(config: Config, pdf_resources: PdfResources) -> Result<(), Box<dyn 
             let mut save = false;
             let mut send = false;
             if let Some(extension) = mail_path.extension() {
-                save = config.output_dir.is_some() && extension.ne("saved") && extension.ne("sent"); 
+                if extension.eq("written") || extension.eq("sent") {
+                    continue; // No need to parse known working stuff
+                }
+                save = config.output_dir.is_some() && extension.ne("written") && extension.ne("sent"); 
                 send = config.post_to.is_some() && extension.ne("sent");
             }
             let receipt = match parse_html(&mail_path, &delims, &selectors) {
