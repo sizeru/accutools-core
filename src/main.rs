@@ -344,8 +344,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     }
 
-    run(config, pdf_resources)?;
-    Ok(())
+    match run(config, pdf_resources) {
+        Ok(_) => error!("Main looped returned with a success value? What?"),
+        Err(e) => error!("Critical error while running: {e}"),
+    };
+    return Err(anyhow!("Return from main loop").into());
 }
 
 #[tokio::main]
