@@ -14,4 +14,6 @@ regex = "1.9.0"
 scraper = "0.17.1"
 reqwest = { version = "0.11", features = ["default"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+log = "0.4.19"
+simplelog = "0.12.1"
 

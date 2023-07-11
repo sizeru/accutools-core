@@ -6,6 +6,7 @@ use kqueue::{Watcher, EventFilter, FilterFlag};
 use regex::{RegexBuilder, Regex};
 use reqwest::{header::*};
 use daemonize::Daemonize;
+use log::{info, warn, error};
 
 const MAX_DESC_LENGTH: usize = 23;
 macro_rules! lpad {
@@ -299,31 +300,49 @@ impl Config {
     }
 }
 
-const CONFIG_PATH: &str = "/etc/receiptd.conf";
+const CONFIG_FILE: &str = "/etc/receiptd.conf";
+const PID_FILE: &str = "/var/run/receiptd.pid";
+const LOG_FILE: &str = "/var/log/receiptd/receiptd.log";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     if let Some(flag) = args.get(1) {
         // Dry run. Check config is valid
         if flag.eq("-n") {
-            let _ = Config::parse(CONFIG_PATH)?;
+            let _ = Config::parse(CONFIG_FILE)?;
             return Ok(());
         }
     }
 
-    let config = Config::parse("/etc/receiptd.conf")?;
+    let config = Config::parse(CONFIG_FILE)?;
     let pdf_resources = PdfResources::load(&config)?;
     
+    
     let daemonize = Daemonize::new()
-        .pid_file("/var/run/receiptd.pid") // Every method except `new` and `start`
-        .chown_pid_file(true)      // is optional, see `Daemonize` documentation
-        .working_directory("/tmp") // for default behaviour.
-        .umask(0o002)
+        .chroot(&root)
         .user("receiptd")
-        .group("receiptd");
+        .group("receiptd")
+        .pid_file(PID_FILE)
+        .chown_pid_file(true)
+        .umask(0o002)
+        .privileged_action(|| {
+            let log = fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(LOG_FILE)
+                .expect(&format!("Could not access log file at {LOG_FILE}"));
+            simplelog::WriteLogger::init(
+                simplelog::LevelFilter::Info,
+                simplelog::Config::default(),
+                log,
+            ).expect("Could not initialize logger");
+        });
+
     match daemonize.start() {
-        Ok(_) => (),
-        Err(e) => eprintln!("Error, {}", e),
+        Ok(_) => info!("Daemonized with config: {:?}", &config),
+        Err(e) => {
+            return Err(anyhow!(format!("Could not daemonize. Error: {e}")));
+        },
     }
 
     run(config, pdf_resources)?;
@@ -364,18 +383,24 @@ async fn run(config: Config, pdf_resources: PdfResources) -> Result<(), Box<dyn 
     let mut watcher = Watcher::new()?;
     watcher.add_file(&mail_dir_file, EventFilter::EVFILT_VNODE, FilterFlag::NOTE_WRITE)?;
     watcher.watch()?;
+    info!("Watcher started for: {}", &config.watch_dir);
     loop {
         if watcher.poll_forever(None).is_none() {
             continue;
         }
+        info!("Change detected");
         let dir = match fs::read_dir(&config.watch_dir) {
             Ok(dir) => dir,
-            Err(_err) => continue,
+            Err(_err) => {
+                error!("Could not read dir: {}", &config.watch_dir);
+                continue;
+            },
         };
         for entry in dir {
             let mail_path = match entry {
                 Ok(entry) => entry.path(),
                 Err(_err) => {
+                    warn!("Could not read entry in dir: {}", &config.watch_dir);
                     continue;
                 },
             };
@@ -391,6 +416,7 @@ async fn run(config: Config, pdf_resources: PdfResources) -> Result<(), Box<dyn 
                     let mut new_name = mail_path.clone();
                     new_name.set_extension("noparse");
                     let _ = fs::rename(&mail_path, &new_name);
+                    warn!("Could not parse: {:?}", &mail_path);
                     continue;
                 },
             };
@@ -400,6 +426,7 @@ async fn run(config: Config, pdf_resources: PdfResources) -> Result<(), Box<dyn 
                     let mut new_name = mail_path.clone();
                     new_name.set_extension("nogen");
                     let _ = fs::rename(&mail_path, &new_name);
+                    warn!("Could not generate a pdf: {:?}", &mail_path);
                     continue;
                 },
             }; 
@@ -409,6 +436,7 @@ async fn run(config: Config, pdf_resources: PdfResources) -> Result<(), Box<dyn 
                     let mut new_name = mail_path.clone();
                     new_name.set_extension("noname");
                     let _ = fs::rename(&mail_path, &new_name);
+                    error!("Could not get a filename: {:?}", &mail_path);
                     continue;
                 }
             };
@@ -418,6 +446,7 @@ async fn run(config: Config, pdf_resources: PdfResources) -> Result<(), Box<dyn 
                     let mut new_name = mail_path.clone();
                     new_name.set_extension("nobytes");
                     let _ = fs::rename(&mail_path, &new_name);
+                    error!("Could not save the pdf documents as bytes: {:?}", &mail_path);
                     continue;
                 }
             };
@@ -439,6 +468,7 @@ async fn run(config: Config, pdf_resources: PdfResources) -> Result<(), Box<dyn 
                         let mut new_name = mail_path.clone();
                         new_name.set_extension("nosave");
                         let _ = fs::rename(&mail_path, &new_name);
+                        error!("Could not create a file `{:?}` to write the pdf document for `{:?}` in.", &save_path, &mail_path);
                         continue;
                     },
                 };
@@ -447,11 +477,13 @@ async fn run(config: Config, pdf_resources: PdfResources) -> Result<(), Box<dyn 
                         let mut new_name = mail_path.clone();
                         new_name.set_extension("written");
                         let _ = fs::rename(&mail_path, &new_name);
+                        info!("Converted `{:?}` into a PDF file and wrote it to `{:?}`", &mail_path, &save_path);
                     },
                     Err(_err) => {
                         let mut new_name = mail_path.clone();
                         new_name.set_extension("nowrite");
                         let _ = fs::rename(&mail_path, &new_name);
+                        error!("Converted `{:?}` into a PDF file but could not write it to `{:?}`", &mail_path, &save_path);
                     }
                 }
             }
@@ -466,6 +498,7 @@ async fn run(config: Config, pdf_resources: PdfResources) -> Result<(), Box<dyn 
                 let mut new_name = mail_path.clone();
                 new_name.set_extension("sent");
                 let _ = fs::rename(&mail_path, &new_name);
+                info!("Sent out mail to some address");
             }
         }
     }
