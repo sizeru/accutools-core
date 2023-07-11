@@ -461,7 +461,7 @@ async fn run(config: Config, pdf_resources: PdfResources) -> Result<(), Box<dyn 
                     .mode(0o664)
                     .write(true)
                     .create(true)
-                    .open(save_path) 
+                    .open(&save_path) 
                 {
                     Ok(file) => {
                         file
