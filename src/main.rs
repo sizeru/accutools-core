@@ -319,6 +319,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .pid_file("/var/run/receiptd.pid") // Every method except `new` and `start`
         .chown_pid_file(true)      // is optional, see `Daemonize` documentation
         .working_directory("/tmp") // for default behaviour.
+        .umask(0o002)
         .user("receiptd")
         .group("receiptd");
     match daemonize.start() {
