@@ -7,13 +7,6 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.71"
-daemonize = "0.5.0"
-kqueue = "1.0.7"
+number_to_words = "0.1.1"
 printpdf = { git = "https://github.com/fschutt/printpdf", features = ["svg"] }
-regex = "1.9.0"
-scraper = "0.17.1"
-reqwest = { version = "0.11", features = ["default"] }
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
-log = "0.4.19"
-simplelog = "0.12.1"
 
