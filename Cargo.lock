@@ -3,6 +3,15 @@
 version = 3
 
 [[package]]
+name = "accutools-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "number_to_words",
+ "printpdf",
+]
+
+[[package]]
 name = "adler"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -564,15 +573,6 @@ name = "rctree"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ae028b272a6e99d9f8260ceefa3caa09300a8d6c8d2b2001316474bc52122e9"
-
-[[package]]
-name = "receiptd"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "number_to_words",
- "printpdf",
-]
 
 [[package]]
 name = "regex-automata"
