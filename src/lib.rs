@@ -138,7 +138,7 @@ impl PdfResources {
             Ok(bytes) => bytes,
             Err(e) => return Err(anyhow!(format!("Could not read the font from the file: `{}`. Reason: `{e}`", &font_bold_file)).into()),
         };
-        let font_mono_file = format!("{data_dir}/fonts/NotoSans-Mono-Regular.ttf");
+        let font_mono_file = format!("{data_dir}/fonts/NotoSans-Mono.ttf");
         let font_mono = match fs::read(&font_mono_file) {
             Ok(bytes) => bytes,
             Err(e) => return Err(anyhow!(format!("Could not read the font from the file: `{}`. Reason: `{e}`", &font_mono_file)).into()),
