@@ -98,7 +98,7 @@ pub struct PdfResources {
 }
 
 impl ReceiptInfo {
-    fn pre_pass(&mut self) -> Result<(), Error> {
+    pub fn pre_pass(&mut self) -> Result<(), Error> {
         let receipt_payment_pos = self.payments
             .iter()
             .position(|tender| tender.name.eq("Pay on Account"));
