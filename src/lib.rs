@@ -1,6 +1,6 @@
 use printpdf::{PdfDocument, PdfDocumentReference, Mm, PdfLayerReference, Point, Line, Pt, SvgTransform, Svg};
 use std::{fs, sync::Arc};
-use anyhow::{Error, Result, Context};
+use anyhow::{Error, Result, anyhow};
 use number_to_words::number_to_words;
 
 const MAX_DESC_LENGTH: usize = 23;
@@ -128,13 +128,31 @@ impl ReceiptInfo {
 }
 impl PdfResources {
     pub fn load(data_dir: &str) -> Result<Self, Error> {
-        let font_regular = fs::read(&format!("{data_dir}/fonts/NotoSans-Regular.ttf"))?;
-        let font_bold = fs::read(&format!("{data_dir}/fonts/NotoSans-Bold.ttf"))?;
-        let font_mono = fs::read(&format!("{data_dir}/fonts/NotoSansMono-Regular.tff"))?;
+        let font_regular_file = format!("{data_dir}/fonts/NotoSans-Regular.ttf");
+        let font_regular = match fs::read(&font_regular_file) {
+            Ok(bytes) => bytes,
+            Err(e) => return Err(anyhow!(format!("Could not read the font from the file: `{}`. Reason: `{e}`", &font_regular_file)).into()),
+        };
+        let font_bold_file = format!("{data_dir}/fonts/NotoSans-Bold.ttf");
+        let font_bold = match fs::read(&font_bold_file) {
+            Ok(bytes) => bytes,
+            Err(e) => return Err(anyhow!(format!("Could not read the font from the file: `{}`. Reason: `{e}`", &font_bold_file)).into()),
+        };
+        let font_mono_file = format!("{data_dir}/fonts/NotoSans-Mono.ttf");
+        let font_mono = match fs::read(&font_mono_file) {
+            Ok(bytes) => bytes,
+            Err(e) => return Err(anyhow!(format!("Could not read the font from the file: `{}`. Reason: `{e}`", &font_mono_file)).into()),
+        };
         let logo = {
-            let svg = fs::read_to_string(&format!("{data_dir}/logo.svg"))
-                .context(format!("No logo.svg found in {data_dir}"))?;
-            Svg::parse(&svg)?
+            let svg_file = format!("{data_dir}/logo.svg");
+            let svg = match fs::read_to_string(&svg_file) {
+                Ok(file_as_string) => file_as_string,
+                Err(e) => return Err(anyhow!(format!("Could not read the logo from the file: `{}`. Reason: `{e}`", &svg_file)).into()),
+            };
+            match Svg::parse(&svg) {
+                Ok(svg) => svg,
+                Err(e) => return Err(anyhow!(format!("Could not parse the svg loaded from: `{}`. Reason: {e}", &svg_file)).into()),
+            }
         };
         // Converting from Vec to Arc doesn't reallocate the memory. Party!
         // This would be a safe thing to use raw pointers on, but I don't want
