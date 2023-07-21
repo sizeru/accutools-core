@@ -108,8 +108,8 @@ impl ReceiptInfo {
             let number_in_words = number_to_words(value_as_float, false);
             self.item_lines.push(
                 ItemLine {
-                    code: String::from("0000"),
-                    description: format!("Received as cash deposit the sum of {number_in_words} for material"),
+                    code: String::new(),
+                    description: format!("Received as cash deposit the sum of {number_in_words} dollars for materials."),
                     quantity: String::new(),
                     price: String::new(),
                     amount: tender.value.clone(),
@@ -119,7 +119,7 @@ impl ReceiptInfo {
             self.totals.push(
                 Amount {
                     name: String::from("Total:"),
-                    value: tender.value.clone(),
+                    value: format!("{value_as_float:.2}"),
                 }
             )
         }
