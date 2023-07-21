@@ -41,17 +41,17 @@ pub struct ReceiptInfo {
 
 #[derive(Debug)]
 pub struct ItemLine {
-    code: String,
-    description: String,
-    quantity: String,
-    price: String,
-    amount: String,
+    pub code: String,
+    pub description: String,
+    pub quantity: String,
+    pub price: String,
+    pub amount: String,
 }
 
 #[derive(Debug)]
 pub struct Amount {
-    name: String,
-    value: String,
+    pub name: String,
+    pub value: String,
 }
 
 trait QuickShapes {
