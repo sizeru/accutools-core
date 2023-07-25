@@ -414,8 +414,9 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
     for amount in &receipt.totals {
         current_y -= line_height;
         if amount.name.is_empty() {
-            current_layer.add_line(x1, current_y, right_margin, current_y);
             current_y += line_height / 2.0;
+            current_layer.add_line(x1, current_y, right_margin, current_y);
+            continue;
         }
         let font = if amount.name.eq("Total:") {
             &font_bold
