@@ -112,7 +112,7 @@ impl ReceiptInfo {
             .position(|tender| tender.name.eq("Pay on Account"));
         if let Some(index) = receipt_payment_pos {
             let tender = self.payments.remove(index);
-            let value_as_float = -str::parse::<f64>(&tender.value)?.abs(); 
+            let value_as_float = str::parse::<f64>(&tender.value)?.abs(); 
             let number_in_words = number_to_words(value_as_float, false);
             self.item_lines.push(
                 ItemLine {
@@ -295,11 +295,11 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
         DocLayout::Standard => {
             (code_index, desc_index, uom_index, quantity_index, price_index, disc_index, total_index) =
                     (Some(0), Some(1), Some(2), Some(3), Some(4), None, Some(5));
-            max_desc_length = 25;
+            max_desc_length = 30;
             vec![
                 left_margin,      //      | Code
                 Pt(95.0).into(), // Code | Desc
-                Pt(307.0).into(), // Desc | U/M
+                Pt(287.0).into(), // Desc | U/M
                 Pt(344.0).into(), // U/M | Qty
                 Pt(408.0).into(), // Qty | Price
                 Pt(488.0).into(), // Price | Total
@@ -308,7 +308,7 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
         DocLayout::StandardWithDiscounts => {
             (code_index, desc_index, uom_index, quantity_index, price_index, disc_index, total_index) =
                     (Some(0), Some(1), Some(2), Some(3), Some(4), Some(5), Some(6));
-            max_desc_length = 20;
+            max_desc_length = 25;
             vec![
                 left_margin,      //      | Code
                 Pt(95.0).into(), // Code | Desc
@@ -320,7 +320,7 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
             ]
         },
         DocLayout::Receipt => {
-            max_desc_length = 70;
+            max_desc_length = 90;
             (code_index, desc_index, uom_index, quantity_index, price_index, disc_index, total_index) =
                     (None, Some(0), None, None, None, None, Some(1));
             vec![
@@ -409,10 +409,14 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
     // add totals below table on right side
     let mut current_y = li_bottom;
     let last_x = *li_vlines.last().unwrap();
-    let x1 = last_x + spacing;
-    let x2 = last_x - Pt(80.0).into();
+    let x1 = last_x - Pt(80.0).into();
+    let x2 = last_x + spacing;
     for amount in &receipt.totals {
         current_y -= line_height;
+        if amount.name.is_empty() {
+            current_layer.add_line(x1, current_y, right_margin, current_y);
+            current_y += line_height / 2.0;
+        }
         let font = if amount.name.eq("Total:") {
             &font_bold
         } else {
