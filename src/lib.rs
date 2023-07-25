@@ -449,12 +449,12 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
     // Add signature line
     current_layer.use_text("Received By", 10.0, Pt(350.0).into(), Pt(74.0).into(), &font_regular);
 
-    // Add slogan
-    current_layer.use_text(&receipt.slogan, 9.0, Pt(258.0).into(), Pt(54.0).into(), &font_regular);
-    
     // Add terms
-    current_layer.use_text("All claims and returned goods MUST be accompanied by this bill", 8.0, Pt(130.0).into(), Pt(44.0).into(), &font_regular);
-    current_layer.use_text("*INTEREST AT THE RATE OF 1.5% PER MONHTH WILL BE CHARGED ON ALL OVERDUE INVOICES*", 8.0, Pt(105.0).into(), Pt(36.0).into(), &font_regular);
+    current_layer.use_text("All claims and returned goods MUST be accompanied by this bill", 8.0, Pt(180.0).into(), Pt(54.0).into(), &font_regular);
+    current_layer.use_text("*INTEREST AT THE RATE OF 1.5% PER MONHTH WILL BE CHARGED ON ALL OVERDUE INVOICES*", 8.0, Pt(130.0).into(), Pt(44.0).into(), &font_regular);
+    
+    // Add slogan
+    current_layer.use_text(&receipt.slogan, 9.0, Pt(258.0).into(), Pt(30.0).into(), &font_regular);
     return Ok(doc);
 
 }
