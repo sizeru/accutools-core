@@ -407,10 +407,11 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
     }
 
     // add totals below table on right side
+    let font_size = 11.0;
     let mut current_y = li_bottom;
     let last_x = *li_vlines.last().unwrap();
-    let x1 = last_x - Pt(80.0).into();
-    let x2 = last_x + spacing;
+    let x1 = last_x - Pt(85.0).into();
+    let x2 = last_x;
     for amount in &receipt.totals {
         current_y -= line_height;
         if amount.name.is_empty() {
