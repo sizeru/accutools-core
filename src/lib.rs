@@ -3,18 +3,23 @@ use std::{fs, sync::Arc};
 use anyhow::{Error, Result, anyhow};
 use number_to_words::number_to_words;
 
-const MAX_DESC_LENGTH: usize = 23;
 macro_rules! lpad {
     ($arg:expr) => {{
         format!("${:>11}", $arg)
     }}
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum DocType {
     Invoice,
     Receipt,
     Quote,
+}
+
+enum DocLayout {
+    Standard,
+    StandardWithDiscounts,
+    Receipt,
 }
 
 #[derive(Debug)]
@@ -44,8 +49,11 @@ pub struct ItemLine {
     pub code: String,
     pub description: String,
     pub quantity: String,
-    pub price: String,
+    pub unit_price: String,
     pub amount: String,
+    pub uom: String,
+    pub discount: Option<String>,
+    pub taxable: bool,
 }
 
 #[derive(Debug)]
@@ -104,15 +112,18 @@ impl ReceiptInfo {
             .position(|tender| tender.name.eq("Pay on Account"));
         if let Some(index) = receipt_payment_pos {
             let tender = self.payments.remove(index);
-            let value_as_float = str::parse::<f64>(&tender.value)?.abs(); 
+            let value_as_float = -str::parse::<f64>(&tender.value)?.abs(); 
             let number_in_words = number_to_words(value_as_float, false);
             self.item_lines.push(
                 ItemLine {
-                    code: String::from("0000"),
+                    code: String::new(),
                     description: format!("Received as cash deposit the sum of {number_in_words} dollars for materials."),
                     quantity: String::new(),
-                    price: String::new(),
-                    amount: tender.value.clone(),
+                    unit_price: String::new(),
+                    discount: None,
+                    uom: String::new(),
+                    amount: format!("{value_as_float:.2}"),
+                    taxable: false,
                 }
             );
             self.totals.clear();
@@ -183,6 +194,23 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
     let left_margin: Mm = Pt(54.0).into();
     let right_margin: Mm = Pt(558.0).into();
 
+    // Figure out which layout this document will be using.
+    let layout_type = match receipt.doc_type {
+        DocType::Invoice | DocType::Quote => {
+            let contains_discounts = 
+                    receipt.doc_type != DocType::Receipt 
+                    && receipt.item_lines.iter().any(|line| line.discount.is_some())
+            ;
+            if contains_discounts {
+                DocLayout::StandardWithDiscounts
+            } else {
+                DocLayout::Standard
+            }
+        },
+        DocType::Receipt => {
+            DocLayout::Receipt
+        },
+    };
     // Add title
     current_layer.use_text(&receipt.title, 14.0, Pt(260.0).into(), Pt(750.0).into(), &font_bold);
 
@@ -223,7 +251,7 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
     // current_layer.use_text("Order ID:"      , font_size, header_positions[1] + spacing, text_bottom, &font_bold);
     current_layer.use_text("VAT Number:", font_size, header_positions[1] + spacing, text_bottom, &font_bold);
     current_layer.use_text(doctype, font_size, header_positions[2] + spacing, text_bottom, &font_bold);
-    let font_size = 12.0;
+    let font_size = 10.0;
     let text_bottom = headers_bottom_border + Pt(4.0).into();
     current_layer.use_text(&receipt.date,      font_size, header_positions[0] + spacing, text_bottom, &font_regular);
     // current_layer.use_text(order_id,           font_size, header_positions[1] + spacing, headers_bottom_border, &font_regular);
@@ -237,7 +265,7 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
     // Fill out customer info
     let mut current_y: Mm = Pt(618.0).into();
     current_layer.use_text("Sold to:", 8.0, left_margin + spacing, current_y, &font_bold);
-    let line_height = Pt(16.0).into();
+    let line_height = Pt(13.0).into();
     receipt.customer_info.split("\n").for_each(
         |line| {
             current_y -= line_height;
@@ -246,6 +274,7 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
     );
 
     // Insert info
+    let font_size = 12.0;
     current_y = Pt(618.0).into();
     let left_border: Mm = Into::<Mm>::into(Pt(390.0)) + spacing;
     current_layer.use_text("Clerk:", 8.0, left_border, current_y, &font_bold);
@@ -260,16 +289,51 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
     current_layer.add_box(left_margin, li_bottom, right_margin, li_top);
 
     // vertical lines to divide line item on invoice
-    let li_vlines: [Mm; 5] = [
-        Pt(104.0).into(), // Name | Desc
-        Pt(282.0).into(), // Desc | U/M
-        Pt(322.0).into(), // U/M | Qty
-        Pt(393.0).into(), // Qty | Price
-        Pt(476.0).into(), // Price | Total
-    ];
-    for x in li_vlines {
-        current_layer.add_line(x, li_bottom, x, li_top);
+    let max_desc_length;
+    let (code_index, desc_index, uom_index, quantity_index, price_index, disc_index, total_index);
+    let li_vlines: Vec<Mm> = match layout_type {
+        DocLayout::Standard => {
+            (code_index, desc_index, uom_index, quantity_index, price_index, disc_index, total_index) =
+                    (Some(0), Some(1), Some(2), Some(3), Some(4), None, Some(5));
+            max_desc_length = 25;
+            vec![
+                left_margin,      //      | Code
+                Pt(104.0).into(), // Code | Desc
+                Pt(282.0).into(), // Desc | U/M
+                Pt(322.0).into(), // U/M | Qty
+                Pt(393.0).into(), // Qty | Price
+                Pt(483.0).into(), // Price | Total
+            ]
+        },
+        DocLayout::StandardWithDiscounts => {
+            (code_index, desc_index, uom_index, quantity_index, price_index, disc_index, total_index) =
+                    (Some(0), Some(1), Some(2), Some(3), Some(4), Some(5), Some(6));
+            max_desc_length = 25;
+            vec![
+                left_margin,      //      | Code
+                Pt(104.0).into(), // Code | Desc
+                Pt(282.0).into(), // Desc | U/M
+                Pt(303.0).into(), // U/M | Qty
+                Pt(363.0).into(), // Qty | Price
+                Pt(423.0).into(), // Price | Disc
+                Pt(483.0).into(), // Disc | Total
+            ]
+        },
+        DocLayout::Receipt => {
+            max_desc_length = 70;
+            (code_index, desc_index, uom_index, quantity_index, price_index, disc_index, total_index) =
+                    (None, Some(0), None, None, None, None, Some(1));
+            vec![
+                left_margin,      //      | Desc
+                Pt(483.0).into(), // Desc | Total
+            ]
+        },
+    };
+
+    for i in 1..li_vlines.len() {
+        current_layer.add_line(li_vlines[i], li_bottom, li_vlines[i], li_top);
     }
+
     // Populate line items and subtotals
     {
         // Add headers
@@ -280,47 +344,55 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
         let mut bottom_border = li_top - line_height_mm;
         let mut cursor_y = bottom_border + spacing;
         current_layer.add_line(left_margin, bottom_border, right_margin, bottom_border);
-        current_layer.use_text("Item"       , font_size, left_margin    + spacing, cursor_y, &font_regular);
-        current_layer.use_text("Description", font_size, li_vlines[0] + spacing, cursor_y, &font_regular);
-        current_layer.use_text("U/M"        , font_size, li_vlines[1] + spacing, cursor_y, &font_regular);
-        current_layer.use_text("Quantity"   , font_size, li_vlines[2] + spacing, cursor_y, &font_regular);
-        current_layer.use_text("Unit Price" , font_size, li_vlines[3] + spacing, cursor_y, &font_regular);
-        current_layer.use_text("Total"      , font_size, li_vlines[4] + spacing, cursor_y, &font_regular);
+        if let Some(code_index) = code_index {         current_layer.use_text("Code"       , font_size, li_vlines[code_index] + spacing, cursor_y, &font_regular) };
+        if let Some(desc_index) = desc_index {         current_layer.use_text("Description", font_size, li_vlines[desc_index] + spacing, cursor_y, &font_regular) };
+        if let Some(uom_index) = uom_index {           current_layer.use_text("U/M"        , font_size, li_vlines[uom_index] + spacing, cursor_y, &font_regular) };
+        if let Some(quantity_index) = quantity_index { current_layer.use_text("Quantity"   , font_size, li_vlines[quantity_index] + spacing, cursor_y, &font_regular) };
+        if let Some(price_index) = price_index {       current_layer.use_text("Unit Price" , font_size, li_vlines[price_index] + spacing, cursor_y, &font_regular) };
+        if let Some(disc_index) = disc_index {         current_layer.use_text("Discount"   , font_size, li_vlines[disc_index] + spacing, cursor_y, &font_regular) };
+        if let Some(total_index) = total_index {       current_layer.use_text("Total"      , font_size, li_vlines[total_index] + spacing, cursor_y, &font_regular) };
 
         // Add content
         bottom_border -= line_height_mm;
         cursor_y = bottom_border + spacing;
-        let font_size = 10.0;
+        let font_size = 8.0;
         let line_height_mm: Mm = Pt(15.0).into();
         for line in &receipt.item_lines {
-            let desc_lines = split_into_lines(&line.description, MAX_DESC_LENGTH);
-            let item_num = str::parse::<usize>(&line.code)?;
-            let uom = if item_num >= 2000 && item_num < 2100 {
-                "EA" // item is a block
-            } else {
-                "TON" // item is not a block
-            };
-            let qty = if uom.eq("EA") && line.quantity.ends_with(".00") { 
-                format!("{:>7}    ", &line.quantity[..line.quantity.len()-3])
-            } else {
-                format!("{:>10}", line.quantity)
-            };
-            let price = if line.price.is_empty() {
-                String::new()
-            } else {
-                lpad!(&line.price)
-            };
-            let amount = if line.amount.is_empty() {
-                String::new()
-            } else {
-                lpad!(&line.amount)
-            };
-            current_layer.use_text(&line.code,      font_size, left_margin  + spacing, cursor_y, &font_mono);
-            current_layer.use_text(&desc_lines[0],  font_size, li_vlines[0] + spacing, cursor_y, &font_mono);
-            current_layer.use_text(uom,             font_size, li_vlines[1] + spacing, cursor_y, &font_mono);
-            current_layer.use_text(&qty,            font_size, li_vlines[2] + spacing, cursor_y, &font_mono);
-            current_layer.use_text(&price,          font_size, li_vlines[3] + spacing, cursor_y, &font_mono);
-            current_layer.use_text(&amount,         font_size, li_vlines[4] + spacing, cursor_y, &font_mono);
+            let desc_lines = split_into_lines(&line.description, max_desc_length);            
+            let item_line_font = &font_mono;
+
+            if let Some(code_index) = code_index {
+                current_layer.use_text(&line.code, font_size, li_vlines[code_index] + spacing, cursor_y, item_line_font);
+            }
+            if let Some(desc_index) = desc_index {
+                current_layer.use_text(&desc_lines[0], font_size, li_vlines[desc_index] + spacing, cursor_y, item_line_font);
+            }
+            if let Some(uom_index) = uom_index {
+                current_layer.use_text(&line.uom, font_size, li_vlines[uom_index] + spacing, cursor_y, item_line_font);
+            }
+            if let Some(quantity_index) = quantity_index {
+                let qty = if line.uom.eq("EA") && line.quantity.ends_with(".00") { 
+                    format!("{:>7}   ", &line.quantity[..line.quantity.len()-3])
+                } else {
+                    format!("{:>10}", line.quantity)
+                };
+                current_layer.use_text(&qty, font_size, li_vlines[quantity_index] + spacing, cursor_y, item_line_font);
+            }
+            if let Some(price_index) = price_index {
+                current_layer.use_text(&lpad!(&line.unit_price), font_size, li_vlines[price_index] + spacing, cursor_y, item_line_font);
+            }
+            if let Some(disc_index) = disc_index {
+                if let Some(discount) = &line.discount {
+                    current_layer.use_text(&lpad!(discount), font_size, li_vlines[disc_index] + spacing, cursor_y, item_line_font);
+                }
+            }
+            if let Some(total_index) = total_index {
+                current_layer.use_text(&lpad!(&line.amount), font_size, li_vlines[total_index] + spacing, cursor_y, item_line_font);
+            }
+            if line.taxable {
+                current_layer.use_text("T", font_size, right_margin + spacing, cursor_y, item_line_font)
+            }
+
             // Add additional description lines
             for i in 1..desc_lines.len() {
                 bottom_border -= line_height_mm;
@@ -343,12 +415,7 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
         } else {
             &font_regular
         };
-        let name = if amount.name.eq("Tax:") {
-            "VAT:"
-        } else {
-            &amount.name
-        };
-        current_layer.use_text(name, font_size, x1, current_y, font);
+        current_layer.use_text(&amount.name, font_size, x1, current_y, font);
         current_layer.use_text(&lpad!(amount.value), 10.0, x2, current_y, &font_mono);
     }
 
