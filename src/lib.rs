@@ -298,25 +298,25 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
             max_desc_length = 25;
             vec![
                 left_margin,      //      | Code
-                Pt(104.0).into(), // Code | Desc
-                Pt(282.0).into(), // Desc | U/M
-                Pt(322.0).into(), // U/M | Qty
-                Pt(393.0).into(), // Qty | Price
-                Pt(483.0).into(), // Price | Total
+                Pt(95.0).into(), // Code | Desc
+                Pt(307.0).into(), // Desc | U/M
+                Pt(344.0).into(), // U/M | Qty
+                Pt(408.0).into(), // Qty | Price
+                Pt(488.0).into(), // Price | Total
             ]
         },
         DocLayout::StandardWithDiscounts => {
             (code_index, desc_index, uom_index, quantity_index, price_index, disc_index, total_index) =
                     (Some(0), Some(1), Some(2), Some(3), Some(4), Some(5), Some(6));
-            max_desc_length = 25;
+            max_desc_length = 20;
             vec![
                 left_margin,      //      | Code
-                Pt(104.0).into(), // Code | Desc
-                Pt(282.0).into(), // Desc | U/M
-                Pt(303.0).into(), // U/M | Qty
-                Pt(363.0).into(), // Qty | Price
-                Pt(423.0).into(), // Price | Disc
-                Pt(483.0).into(), // Disc | Total
+                Pt(95.0).into(), // Code | Desc
+                Pt(270.0).into(), // Desc | U/M
+                Pt(290.0).into(), // U/M | Qty
+                Pt(354.0).into(), // Qty | Price
+                Pt(419.0).into(), // Price | Disc
+                Pt(485.0).into(), // Disc | Total
             ]
         },
         DocLayout::Receipt => {
@@ -394,10 +394,12 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
             }
 
             // Add additional description lines
-            for i in 1..desc_lines.len() {
-                bottom_border -= line_height_mm;
-                cursor_y = bottom_border + spacing;
-                current_layer.use_text(&desc_lines[i], font_size, li_vlines[0] + spacing, cursor_y, &font_mono);
+            if let Some(desc_index) = desc_index {
+                for i in 1..desc_lines.len() {
+                    bottom_border -= line_height_mm;
+                    cursor_y = bottom_border + spacing;
+                    current_layer.use_text(&desc_lines[i], font_size, li_vlines[desc_index] + spacing, cursor_y, &font_mono);
+                }
             }
             bottom_border -= line_height_mm;
             cursor_y = bottom_border + spacing;
@@ -406,8 +408,9 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
 
     // add totals below table on right side
     let mut current_y = li_bottom;
-    let x1 = li_vlines[3] + spacing;
-    let x2 = li_vlines[4] + spacing;
+    let last_x = *li_vlines.last().unwrap();
+    let x1 = last_x + spacing;
+    let x2 = last_x - Pt(80.0).into();
     for amount in &receipt.totals {
         current_y -= line_height;
         let font = if amount.name.eq("Total:") {
