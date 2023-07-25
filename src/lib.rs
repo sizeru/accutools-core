@@ -212,7 +212,7 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
         },
     };
     // Add title
-    current_layer.use_text(&receipt.title, 14.0, Pt(260.0).into(), Pt(750.0).into(), &font_bold);
+    current_layer.use_text(&receipt.title, 14.0, Pt(254.0).into(), Pt(750.0).into(), &font_bold);
 
     // Add company header
     current_layer.use_text(&receipt.company_name, 28.0, Pt(225.0).into(), Pt(712.0).into(), &font_bold);
@@ -454,7 +454,7 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
     current_layer.use_text("*INTEREST AT THE RATE OF 1.5% PER MONHTH WILL BE CHARGED ON ALL OVERDUE INVOICES*", 8.0, Pt(130.0).into(), Pt(44.0).into(), &font_regular);
     
     // Add slogan
-    current_layer.use_text(&receipt.slogan, 9.0, Pt(258.0).into(), Pt(30.0).into(), &font_regular);
+    current_layer.use_text(&receipt.slogan, 9.0, Pt(254.0).into(), Pt(30.0).into(), &font_regular);
     return Ok(doc);
 
 }
