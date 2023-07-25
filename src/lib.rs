@@ -411,7 +411,7 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
     let mut current_y = li_bottom;
     let last_x = *li_vlines.last().unwrap();
     let x1 = last_x - Pt(85.0).into();
-    let x2 = last_x;
+    let x2 = last_x - Pt(5.0).into();
     for amount in &receipt.totals {
         current_y -= line_height;
         if amount.name.is_empty() {
