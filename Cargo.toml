@@ -1,6 +1,6 @@
 [package]
 name = "accutools-core"
-version = "0.2.2-l"
+version = "0.2.2-m"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
