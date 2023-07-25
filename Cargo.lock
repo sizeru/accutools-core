@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "accutools-core"
-version = "0.2.2-k"
+version = "0.2.2-l"
 dependencies = [
  "anyhow",
  "number_to_words",

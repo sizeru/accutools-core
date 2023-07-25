@@ -300,7 +300,7 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
                 left_margin,      //      | Code
                 Pt(95.0).into(), // Code | Desc
                 Pt(287.0).into(), // Desc | U/M
-                Pt(364.0).into(), // U/M | Qty
+                Pt(324.0).into(), // U/M | Qty
                 Pt(408.0).into(), // Qty | Price
                 Pt(488.0).into(), // Price | Total
             ]
