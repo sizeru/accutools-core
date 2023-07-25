@@ -300,7 +300,7 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
                 left_margin,      //      | Code
                 Pt(95.0).into(), // Code | Desc
                 Pt(287.0).into(), // Desc | U/M
-                Pt(344.0).into(), // U/M | Qty
+                Pt(364.0).into(), // U/M | Qty
                 Pt(408.0).into(), // Qty | Price
                 Pt(488.0).into(), // Price | Total
             ]
@@ -312,9 +312,9 @@ pub fn gen_pdf(receipt: &ReceiptInfo, resources: &PdfResources) -> Result<PdfDoc
             vec![
                 left_margin,      //      | Code
                 Pt(95.0).into(), // Code | Desc
-                Pt(270.0).into(), // Desc | U/M
+                Pt(250.0).into(), // Desc | U/M
                 Pt(290.0).into(), // U/M | Qty
-                Pt(354.0).into(), // Qty | Price
+                Pt(351.0).into(), // Qty | Price
                 Pt(419.0).into(), // Price | Disc
                 Pt(485.0).into(), // Disc | Total
             ]
